@@ -16,6 +16,7 @@ ci-local summary: node 24.21.0, project myapp-ci, jobs: quality tests
   ok       Start the database                                         11s
   ok       npm test                                                   1m12s
   total 1m40s
+  checkout: commit 3f9c2a1b7d0e, clean
 PASSED: every step ran and passed. This is not the GitHub check.
 Development stack untouched: 3 container(s), same ids and start times as before.
 ```
@@ -114,6 +115,8 @@ npx ci-local --down           # remove what --keep left
 
 With any test runner:
 
+`parityProblems({ cwd, substitutions, jobs })` passes the options on.
+
 ```ts
 import { parityProblems } from '@jals1212/ci-local/parity'
 
@@ -124,15 +127,25 @@ test('ci-local runs what the workflow runs', async () => {
 
 `parityProblems` runs three checks, each also exported on its own:
 
-- `mirroringProblems(plan, workflow, { substitutions })`: every `run:` step of
-  every job is a box step with the same commands (comments, blank lines and
-  `\` continuations aside), in the workflow's order within each job, or is named
-  with `ci_not_mirrored`, or is stood for by a step declared `--deviates`;
-  and every `ci_not_mirrored` and `--deviates` names a real step.
+- `mirroringProblems(plan, workflow, { substitutions, jobs })`: every `run:`
+  step of every job is a box step with the same commands (comments, blank lines
+  and `\` continuations aside), in the workflow's order within each job, or is
+  named with `ci_not_mirrored`, or is stood for by a step declared
+  `--deviates`; and every `ci_not_mirrored` and `--deviates` names a real step.
+  Each workflow job is the ci-local job of the same name (one of `CI_JOBS`), and
+  only steps that run for that job count, so `--only tests` runs what the
+  `tests` job runs. When the names differ, map them: `jobs: { 'unit-tests':
+  'tests' }`. A job with no `run:` step to mirror needs no ci-local job.
   `substitutions` are `[from, to]` pairs for deliberate differences, such as a
   container name.
-- `publishedPortProblems(plan)`: neither the runner nor any `docker run` in a
-  host step publishes a port.
+- `publishedPortProblems(plan, { cwd })`: nothing publishes a port or joins the
+  host's network: not the runner, not a `docker run`/`docker create` in a host
+  step or in a config function it calls (`-p`, `-p8080:80`, `-dp`, `-P`,
+  `--publish`, `--network host`), and not a compose file such a step brings up
+  (`docker compose -f FILE up|create|run`, or the default `compose.yaml` and its
+  override): `ports:` or `network_mode: host`. `$REPO` and `$CI_PROJECT` in a
+  `-f` path are resolved; a compose file that cannot be found or read is a
+  problem, not a pass.
 - `nodeVersionProblems(workflow)`: `.nvmrc` is exact and every `setup-node`
   reads it, and only it.
 
@@ -192,12 +205,41 @@ everything labelled with `CI_LABEL` are removed, unless you passed `--keep`.
 
 The steps run on your checkout, so whatever they write there stays.
 
+## What the steps can see
+
+Your working tree, not the commit GitHub checks out. The summary says which:
+the commit, how many uncommitted changes (untracked files included), and the
+ignored files the steps can see (a `dist/`, a `coverage/`, a nested
+`node_modules`), which a fresh checkout would not have:
+
+```text
+  checkout: commit 3f9c2a1b7d0e, 2 uncommitted change(s)
+  ignored files the steps can see: dist/ packages/api/node_modules/
+```
+
+The root `node_modules` (a volume) and `CI_HIDE_FILES` are hidden, so they are
+not listed.
+
+## What it can reach
+
+The runner has the host's Docker socket and passwordless sudo, as GitHub's
+runner does: a step can do anything on your machine that Docker can, which is
+everything. The end-of-run check that the development stack is untouched
+detects a change; it does not prevent one. Run the plans you would run on
+your machine anyway.
+
 ## What it does not cover
 
 - **It does not make the GitHub check green.** A pull request's check is the
   workflow's run on GitHub; nothing here reports to it.
 - Another machine: `ubuntu-latest` is amd64, and on Apple Silicon your steps
   run arm64.
+- Another distribution: the runner is `node:<version>-bookworm` (Debian 12),
+  `ubuntu-latest` is Ubuntu. System libraries and `apt` packages differ (what
+  `playwright install --with-deps` installs, a native module's glibc).
+- The workflow's `if:`, `env:`, `defaults`, `working-directory`, `shell` and
+  `matrix`: the parity test compares commands, not these. A `${{ }}` in a
+  `run:` matches only through `substitutions`.
 - `uses:` actions. ci-local runs `run:` steps; an action's effect (a login, a
   cache) is yours to reproduce or to name with `ci_not_mirrored`.
 

@@ -27,6 +27,8 @@ export interface Plan {
   runnerArgs: string[]
   notMirrored: { name: string; reason: string }[]
   steps: PlanStep[]
+  /** Every function the config defines, name to `declare -f` source (absent from plans of older versions). */
+  functions?: Record<string, string>
 }
 
 export interface Workflow {
@@ -47,11 +49,17 @@ export function stepEnv(step: PlanStep): Record<string, string>
 export function mirroringProblems(
   plan: Plan,
   workflow: Workflow,
-  options?: { substitutions?: [string, string][] }
+  options?: {
+    substitutions?: [string, string][]
+    /** Workflow job id to ci-local job (CI_JOBS), where the names differ. */
+    jobs?: Record<string, string>
+  }
 ): string[]
-export function publishedPortProblems(plan: Plan): string[]
+/** `cwd`: where compose files named by host steps are read from. */
+export function publishedPortProblems(plan: Plan, options?: { cwd?: string }): string[]
 export function nodeVersionProblems(workflow: Workflow, options?: { cwd?: string }): Promise<string[]>
 export function parityProblems(options?: {
   cwd?: string
   substitutions?: [string, string][]
+  jobs?: Record<string, string>
 }): Promise<string[]>

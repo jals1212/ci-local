@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-CI_LOCAL_VERSION="0.1.5"
+CI_LOCAL_VERSION="0.2.0"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
@@ -287,6 +287,38 @@ dev_snapshot() {
     { grep -v "^$CI_PROJECT " || true; } | sort
 }
 
+# What the steps see of the checkout, which is not what GitHub checks out:
+# the commit, the uncommitted changes, and the ignored files (a build output,
+# a cache) a fresh checkout would not have. The root node_modules (a volume)
+# and CI_HIDE_FILES are not seen, so not listed.
+checkout_state() {
+  if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "checkout: not a git checkout"
+    return 0
+  fi
+  local sha changes prefix path file hidden shown="" count=0
+  sha="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null)" || sha="(no commit yet)"
+  changes="$(git -C "$REPO" status --porcelain --untracked-files=all -- . | grep -c . || true)"
+  if [[ $changes -eq 0 ]]; then
+    echo "checkout: commit $sha, clean"
+  else
+    echo "checkout: commit $sha, $changes uncommitted change(s)"
+  fi
+  prefix="$(git -C "$REPO" rev-parse --show-prefix)"
+  while IFS= read -r path; do
+    path="${path#!! }"
+    path="${path#"$prefix"}"
+    [[ "$path" != node_modules/ ]] || continue
+    hidden=0
+    for file in ${CI_HIDE_FILES[@]+"${CI_HIDE_FILES[@]}"}; do [[ "$path" != "$file" ]] || hidden=1; done
+    [[ $hidden -eq 0 ]] || continue
+    count=$((count + 1))
+    [[ $count -gt 5 ]] || shown+=" $path"
+  done < <(git -C "$REPO" status --porcelain --ignored --untracked-files=normal -- . | grep '^!! ' || true)
+  [[ $count -le 5 ]] || shown+=" (and $((count - 5)) more)"
+  [[ -z "$shown" ]] || echo "ignored files the steps can see:$shown"
+}
+
 # ---------------------------------------------------------------- output
 
 fmt_duration() {
@@ -362,7 +394,14 @@ print_plan() {
     fi
     printf '}'
   done
-  printf ']}\n'
+  # Every function the config defines, so a check can follow a host step
+  # into the helpers it calls.
+  printf '],"functions":{'
+  for i in ${CONFIG_FUNCTIONS[@]+"${!CONFIG_FUNCTIONS[@]}"}; do
+    [[ $i -eq 0 ]] || printf ','
+    printf '%s:%s' "$(json_string "${CONFIG_FUNCTIONS[$i]}")" "$(json_string "$(declare -f "${CONFIG_FUNCTIONS[$i]}")")"
+  done
+  printf '}}\n'
 }
 
 usage() {
@@ -425,8 +464,15 @@ REPO="$(find_repo)" || {
 }
 cd "$REPO"
 
+# The functions the config defines, for --print-plan: the engine's are known
+# before it is sourced.
+FUNCTIONS_BEFORE="$NL$(declare -F)$NL"
 # shellcheck disable=SC1090
 source "$REPO/${CI_LOCAL_CONFIG:-ci-local.config.sh}"
+CONFIG_FUNCTIONS=()
+while read -r _ _ fn; do
+  [[ "$FUNCTIONS_BEFORE" == *" $fn$NL"* ]] || CONFIG_FUNCTIONS+=("$fn")
+done < <(declare -F)
 
 [[ $HELP -eq 0 ]] || { usage; exit 0; }
 
@@ -511,9 +557,10 @@ SUMMARY_PRINTED=0
 PLAN_STARTED=0
 STARTED=$SECONDS
 DEV_BEFORE=""
+CHECKOUT=""
 
 print_summary() {
-  local i n=0
+  local i n=0 line
   SUMMARY_PRINTED=1
   echo
   echo "ci-local summary: node ${NODE_VERSION}, project ${CI_PROJECT}, jobs: ${SELECTED[*]}${SKIP:+, skipped tags: $SKIP}"
@@ -522,6 +569,7 @@ print_summary() {
     n=$((n + 1))
   done
   echo "  total $(fmt_duration $((SECONDS - STARTED)))"
+  while IFS= read -r line; do echo "  $line"; done <<<"$CHECKOUT"
   # A step that ran another command than its workflow step on purpose makes
   # this run weaker than GitHub's: say where, and why, every time.
   n=0
@@ -627,6 +675,8 @@ finish() {
 }
 
 DEV_BEFORE="$(dev_snapshot)"
+# Before any step writes to the checkout.
+CHECKOUT="$(checkout_state)"
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM

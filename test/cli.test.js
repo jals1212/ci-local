@@ -216,3 +216,35 @@ test('the runner is gone before ci_teardown runs', { skip: !docker && 'no Docker
   assert.match(out, /teardown: runner gone/)
   assert.doesNotMatch(out, /teardown: runner present/)
 })
+
+test('--print-plan carries the source of every function the config defines, and no engine function', () => {
+  const plan = JSON.parse(ciLocal(['--print-plan']).out)
+  assert.deepEqual(Object.keys(plan.functions), ['ci_plan', 'start_database'])
+  assert.match(plan.functions.start_database, /^start_database \(\)/)
+})
+
+const git = (cwd, ...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' })
+
+test('the run names the commit, uncommitted changes and visible ignored files', { skip: !docker && 'no Docker daemon' }, () => {
+  const dir = project(
+    ['CI_PROJECT=ci-local-selftest', 'CI_JOBS=(a)', 'passes() { :; }', 'ci_plan() { ci_step host "Plain" passes; }', ''].join('\n')
+  )
+  assert.match(ciLocal([], { cwd: dir }).out, /\n {2}checkout: not a git checkout\n/)
+
+  git(dir, 'init', '-q')
+  writeFileSync(join(dir, '.gitignore'), 'dist/\n.env\nnode_modules/\n')
+  git(dir, 'add', '.')
+  git(dir, 'commit', '-qm', 'one')
+  const sha = git(dir, 'rev-parse', '--short=12', 'HEAD').stdout.trim()
+  assert.match(ciLocal([], { cwd: dir }).out, new RegExp(`\\n {2}checkout: commit ${sha}, clean\\n`))
+
+  writeFileSync(join(dir, 'new.txt'), 'x')
+  writeFileSync(join(dir, '.env'), 'SECRET=1')
+  spawnSync('mkdir', ['-p', join(dir, 'dist'), join(dir, 'node_modules')])
+  writeFileSync(join(dir, 'dist', 'a.js'), '')
+  writeFileSync(join(dir, 'node_modules', 'b.js'), '')
+  const { out } = ciLocal([], { cwd: dir })
+  assert.match(out, new RegExp(`\\n {2}checkout: commit ${sha}, 1 uncommitted change\\(s\\)\\n`))
+  // .env is hidden from the steps and the root node_modules is a volume: neither is listed.
+  assert.match(out, /\n {2}ignored files the steps can see: dist\/\n/)
+})

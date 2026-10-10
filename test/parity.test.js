@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
@@ -123,4 +126,121 @@ test('a --deviates step must name a workflow step, in order', async () => {
   assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [
     'tests: "npm test" runs out of the workflow\'s order',
   ])
+})
+
+// --------------------------------------------------- published ports, more
+
+const hostPlan = (source, extra = {}) => ({
+  project: 'p',
+  runnerArgs: [],
+  steps: [{ kind: 'host', name: 'Services', command: source.split(' ')[0], source }],
+  ...extra,
+})
+
+test('a port published without a space, or in a cluster of short flags, is found', () => {
+  assert.equal(publishedPortProblems({ runnerArgs: ['-p8080:80'], steps: [] }).length, 1)
+  assert.equal(publishedPortProblems({ runnerArgs: ['-p', '8080:80'], steps: [] }).length, 1)
+  assert.equal(publishedPortProblems(hostPlan('up () { docker run -dp 80:80 nginx; }')).length, 1)
+  assert.equal(publishedPortProblems(hostPlan('up () { docker run -dP nginx; }')).length, 1)
+  assert.equal(publishedPortProblems(hostPlan('up () { docker container run --publish=80:80 nginx; }')).length, 1)
+})
+
+test('other flags that contain a p are not a published port', () => {
+  for (const source of [
+    'up () { docker run -d -ePATH=/x -v /tmp:/tmp nginx; }',
+    'up () { docker run -d -e P=1 --pull always nginx; }',
+    'up () { docker run -d nginx && mkdir -p tmp; }',
+  ]) {
+    assert.deepEqual(publishedPortProblems(hostPlan(source)), [], source)
+  }
+})
+
+test('the host network is found, as it shares every port with the machine', () => {
+  assert.equal(publishedPortProblems(hostPlan('up () { docker run -d --network host nginx; }')).length, 1)
+  assert.equal(publishedPortProblems(hostPlan('up () { docker run -d --net=host nginx; }')).length, 1)
+  assert.equal(publishedPortProblems({ runnerArgs: ['--network=host'], steps: [] }).length, 1)
+})
+
+test('a port published in a function the host step calls is found', () => {
+  const plan = hostPlan('up () { echo starting; start_web; }', {
+    functions: {
+      up: 'up () { echo starting; start_web; }',
+      start_web: 'start_web () { docker run -d -p 80:80 nginx; }',
+    },
+  })
+  assert.deepEqual(publishedPortProblems(plan), [
+    'host step "Services" publishes a port: start_web () { docker run -d -p 80:80 nginx; }',
+  ])
+})
+
+const composeProject = (files) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-compose-'))
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content)
+  return dir
+}
+
+test('ports in a compose file a host step brings up are found', () => {
+  const cwd = composeProject({
+    'compose.ci.yml': 'services:\n  db:\n    image: postgres:17\n    ports: ["5432:5432"]\n  cache:\n    image: redis\n',
+  })
+  for (const source of [
+    'up () { docker compose -f compose.ci.yml -p "$CI_PROJECT" up -d --wait; }',
+    'up () { docker compose --file="$REPO/compose.ci.yml" up -d; }',
+  ]) {
+    assert.deepEqual(publishedPortProblems(hostPlan(source), { cwd }), [
+      'host step "Services": compose.ci.yml publishes ports of service "db"',
+    ], source)
+  }
+})
+
+test('the default compose file and its override are read when no -f is given', () => {
+  const cwd = composeProject({
+    'compose.yaml': 'services:\n  db:\n    image: postgres:17\n',
+    'compose.override.yaml': 'services:\n  db:\n    network_mode: host\n',
+  })
+  assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose up -d; }'), { cwd }), [
+    'host step "Services": compose.override.yaml puts service "db" on the host network',
+  ])
+})
+
+test('a compose file without ports, or a compose command that starts nothing, is no problem', () => {
+  const cwd = composeProject({
+    'compose.yaml': 'services:\n  db:\n    image: postgres:17\n    ports: ["5432:5432"]\n',
+    'compose.ci.yml': 'services:\n  db:\n    image: postgres:17\n    expose: ["5432"]\n',
+  })
+  assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose -f compose.ci.yml up -d; }'), { cwd }), [])
+  assert.deepEqual(publishedPortProblems(hostPlan('logs () { docker compose logs db; }'), { cwd }), [])
+})
+
+test('a compose file that cannot be read is a problem, not a pass', () => {
+  const cwd = composeProject({})
+  assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose -f "$SOMEWHERE/x.yml" up -d; }'), { cwd }), [
+    'host step "Services": cannot check compose file "$SOMEWHERE/x.yml" for published ports',
+  ])
+})
+
+// ------------------------------------------------------------ jobs
+
+test('a workflow command matched only by a step of another job is named', async () => {
+  const { plan, workflow } = await fixture()
+  workflow.jobs.tests.steps.push({ run: 'npm run lint' })
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [
+    'tests: "npm run lint" is in the plan only for other jobs (quality)',
+  ])
+})
+
+test('a workflow job that is no ci-local job is named, unless mapped with the jobs option', async () => {
+  const { plan, workflow } = await fixture()
+  workflow.jobs.lint = workflow.jobs.quality
+  delete workflow.jobs.quality
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [
+    'workflow job "lint" is no ci-local job: add it to CI_JOBS, or map it with the jobs option',
+  ])
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS, jobs: { lint: 'quality' } }), [])
+})
+
+test('a workflow job with nothing to mirror needs no ci-local job', async () => {
+  const { plan, workflow } = await fixture()
+  workflow.jobs.label = { steps: [{ uses: 'actions/labeler@v5' }] }
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [])
 })
