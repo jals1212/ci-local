@@ -1,9 +1,15 @@
-# Publishes to npm when a tag vX.Y.Z is pushed, through npm's trusted
-# publishing (OIDC): no npm token is stored anywhere, and the package carries
-# a provenance statement that links it to this workflow run.
+# Stages a release on npm when a tag vX.Y.Z is pushed, through npm's trusted
+# publishing (OIDC): no npm token is stored anywhere, and the package carries a
+# provenance statement that links it to this workflow run.
 #
-# One-time setup on npmjs.com: the package's Settings -> Trusted publishing ->
-# GitHub Actions, repository jals1212/ci-local, workflow release.yml.
+# Staged, not published: the version waits on the registry, invisible, until a
+# maintainer approves it with 2FA (`npm stage list`, then
+# `npm stage approve <id>`, or on npmjs.com). A pushed tag alone publishes
+# nothing.
+#
+# One-time setup on npmjs.com: the package's Settings -> Trusted publisher ->
+# GitHub Actions, repository jals1212/ci-local, workflow release.yml, with
+# "Allow npm publish" and "Allow npm dist-tag" left unchecked.
 name: Release
 
 on:
@@ -19,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Trusted publishing needs npm 11.5.1 or later: Node 24 ships it.
+      # `npm stage` needs npm 11.19 or later (Node 24.21 ships it); checked below.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -32,4 +38,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      - run: npm publish
+      - name: Stage the release (approve it on npm with 2FA)
+        run: |
+          npm stage --help >/dev/null 2>&1 || { echo "::error::npm $(npm -v) has no npm stage"; exit 1; }
+          npm stage publish --provenance --access public
