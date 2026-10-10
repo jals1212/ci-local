@@ -46,6 +46,8 @@ containers. ci-local takes another route, for Node projects:
 - bash 3.2 or later (the one macOS ships is enough).
 - A Node project with an exact version in `.nvmrc` (`24.21.0`, not `24`), and
   a GitHub Actions workflow whose `setup-node` reads it.
+- npm, or pnpm or yarn pinned in `package.json` (`"packageManager":
+  "pnpm@12.9.1"`): the runner has corepack enabled, so the pinned version runs.
 
 ## Install
 

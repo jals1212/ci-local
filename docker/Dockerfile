@@ -24,3 +24,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner \
  && chmod 0440 /etc/sudoers.d/runner
+
+# The package manager a project pins in package.json ("packageManager":
+# "pnpm@x.y.z", or yarn) runs as pinned, through corepack: it downloads that
+# exact version, checks it, and keeps it under ~/.cache, which ci-local keeps
+# between runs. npm needs nothing. No prompt before the download: the runner
+# is not interactive.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
