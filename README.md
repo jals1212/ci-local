@@ -162,6 +162,7 @@ the cleanup removes everything that carries it) and `CI_NETWORK`.
 | `ci_not_mirrored STEP REASON`     | A workflow step ci-local does not run as written.          |
 | `ci_preflight`                    | Optional. Runs before anything starts (read a token).      |
 | `ci_teardown`                     | Optional. Extra cleanup (a compose project, an image).     |
+| `ci_on_failure STEP`              | Optional. Diagnostics when STEP fails, before the cleanup (service logs). |
 | `ci_build_runner`, `ci_start_runner` | Host steps ci-local provides; put them in your plan.    |
 
 `ci_step` kinds: `box` runs a shell script in the runner with

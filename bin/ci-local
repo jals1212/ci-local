@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-CI_LOCAL_VERSION="0.1.1"
+CI_LOCAL_VERSION="0.1.2"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
@@ -583,6 +583,8 @@ finish() {
     echo
     echo "Containers of project $CI_PROJECT at the failure:"
     docker ps -a --filter "label=$CI_LABEL" --format '  {{.Names}}  {{.Status}}'
+    # The project's own diagnostics (service logs, a compose ps), before the cleanup.
+    [[ "$(type -t ci_on_failure)" != function ]] || ci_on_failure "$FAILED_STEP" || true
   fi
   echo
   if [[ $KEEP -eq 1 ]]; then

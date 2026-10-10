@@ -152,6 +152,7 @@ test('a host step stops at its first failing command', { skip: !docker && 'no Do
       'CI_JOBS=(a)',
       'fails_midway() { echo before; false; echo after-the-failure; }',
       'passes() { echo second-step; }',
+      'ci_on_failure() { echo "diagnostics for: $1"; }',
       'ci_plan() {',
       '  ci_step host "Fails midway" fails_midway',
       '  ci_step host "Never runs" passes',
@@ -165,5 +166,6 @@ test('a host step stops at its first failing command', { skip: !docker && 'no Do
   assert.doesNotMatch(out, /after-the-failure/)
   assert.doesNotMatch(out, /second-step/)
   assert.match(out, /FAILED at step: Fails midway/)
+  assert.match(out, /diagnostics for: Fails midway/)
   assert.match(err, /Fails midway: FAILED with exit code 1/)
 })
