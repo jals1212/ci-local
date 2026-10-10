@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-CI_LOCAL_VERSION="0.1.3"
+CI_LOCAL_VERSION="0.1.4"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
@@ -259,8 +259,10 @@ ci_start_runner() {
 # node_modules volume. Caches (npm, ~/.cache) and images stay.
 teardown() {
   local ids
-  [[ "$(type -t ci_teardown)" != function ]] || ci_teardown || true
+  # The runner first: while it is attached, a network it joined (one compose
+  # created, say) cannot be removed by ci_teardown's `compose down`.
   docker rm -f -v "$RUNNER" >/dev/null 2>&1 || true
+  [[ "$(type -t ci_teardown)" != function ]] || ci_teardown || true
   ids="$(docker ps -aq --filter "label=$CI_LABEL")"
   # shellcheck disable=SC2086
   [[ -z "$ids" ]] || docker rm -f -v $ids >/dev/null 2>&1 || true
@@ -520,6 +522,15 @@ print_summary() {
     n=$((n + 1))
   done
   echo "  total $(fmt_duration $((SECONDS - STARTED)))"
+  # A step that ran another command than its workflow step on purpose makes
+  # this run weaker than GitHub's: say where, and why, every time.
+  n=0
+  for i in ${RUN_INDEXES[@]+"${RUN_INDEXES[@]}"}; do
+    if [[ -n "${RESULTS[$n]:-}" && -n "${PLAN_DEVIATES[$i]}" ]]; then
+      echo "  DEVIATES ${PLAN_NAMES[$i]}: ${PLAN_DEVIATES[$i]}"
+    fi
+    n=$((n + 1))
+  done
   if [[ -n "$FAILED_STEP" ]]; then
     echo "FAILED at step: $FAILED_STEP"
   else

@@ -177,3 +177,42 @@ test('a host step stops at its first failing command', { skip: !docker && 'no Do
   assert.match(out, /diagnostics for: Fails midway/)
   assert.match(err, /Fails midway: FAILED with exit code 1/)
 })
+
+test('the summary names every step that ran with --deviates, and its reason', { skip: !docker && 'no Docker daemon' }, () => {
+  const dir = project(
+    [
+      'CI_PROJECT=ci-local-selftest',
+      'CI_JOBS=(a b)',
+      'passes() { :; }',
+      'ci_plan() {',
+      '  ci_step host "Plain" passes',
+      '  ci_step host "Narrower" --deviates "leaves out one spec" passes',
+      '  ci_step host "Other job" --job b --deviates "never runs here" passes',
+      '}',
+      '',
+    ].join('\n')
+  )
+  const { status, out } = ciLocal(['--only', 'a'], { cwd: dir })
+  assert.equal(status, 0)
+  assert.match(out, /\n {2}DEVIATES Narrower: leaves out one spec\nPASSED/)
+  assert.doesNotMatch(out, /DEVIATES Plain|DEVIATES Other job/)
+})
+
+test('the runner is gone before ci_teardown runs', { skip: !docker && 'no Docker daemon' }, () => {
+  const dir = project(
+    [
+      'CI_PROJECT=ci-local-selftest',
+      'CI_JOBS=(a)',
+      'fake_runner() { docker create --name ci-local-selftest-runner --label "$CI_LABEL" busybox true >/dev/null; }',
+      'ci_teardown() {',
+      '  if docker inspect ci-local-selftest-runner >/dev/null 2>&1; then echo "teardown: runner present"; else echo "teardown: runner gone"; fi',
+      '}',
+      'ci_plan() { ci_step host "Fake runner" fake_runner; }',
+      '',
+    ].join('\n')
+  )
+  const { status, out } = ciLocal([], { cwd: dir })
+  assert.equal(status, 0)
+  assert.match(out, /teardown: runner gone/)
+  assert.doesNotMatch(out, /teardown: runner present/)
+})

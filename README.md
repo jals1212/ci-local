@@ -162,7 +162,7 @@ the cleanup removes everything that carries it) and `CI_NETWORK`.
 | `ci_env NAME KEY=VALUE...`        | A named set of variables for `ci_step --env`.              |
 | `ci_not_mirrored STEP REASON`     | A workflow step ci-local does not run as written.          |
 | `ci_preflight`                    | Optional. Runs before anything starts (read a token).      |
-| `ci_teardown`                     | Optional. Extra cleanup (a compose project, an image).     |
+| `ci_teardown`                     | Optional. Extra cleanup (a compose project, an image), after the runner is removed. |
 | `ci_on_failure STEP`              | Optional. Diagnostics when STEP fails, before the cleanup (service logs). |
 | `ci_build_runner`, `ci_start_runner` | Host steps ci-local provides; put them in your plan.    |
 
@@ -178,7 +178,7 @@ on your machine, with `set -e` in force. Options:
 | `--pass NAME`   | Pass a variable from your environment by name: its value is never written into the container's configuration. |
 | `--timeout S`   | Kill a box step after S seconds.                                                 |
 | `--tag TAG`     | A tag `--skip` can name (for example `network`, to work offline).                |
-| `--deviates R`  | The step stands for the workflow step of the same name (or first command line) but runs another command on purpose, for reason R. The parity check accepts it in that position; R appears in `--print-plan`. |
+| `--deviates R`  | The step stands for the workflow step of the same name (or first command line) but runs another command on purpose, for reason R. The parity check accepts it in that position; R appears in `--print-plan` and, when the step ran, in a `DEVIATES` line of the summary. |
 
 ## What it leaves on your machine
 
