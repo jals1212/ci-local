@@ -1,0 +1,32 @@
+name: CI
+on: [push]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - name: Audit
+        run: npm audit signatures
+      - run: npm run lint
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      DB_HOST: 127.0.0.1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - name: Start the database
+        run: docker run -d --name db -p 5432:5432 postgres:17
+      - name: Create the database
+        run: >-
+          docker exec db
+          createdb -U postgres app
+      - run: npm test

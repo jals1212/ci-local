@@ -1,0 +1,35 @@
+# Publishes to npm when a tag vX.Y.Z is pushed, through npm's trusted
+# publishing (OIDC): no npm token is stored anywhere, and the package carries
+# a provenance statement that links it to this workflow run.
+#
+# One-time setup on npmjs.com: the package's Settings -> Trusted publishing ->
+# GitHub Actions, repository jals1212/ci-local, workflow release.yml.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Trusted publishing needs npm 11.5.1 or later: Node 24 ships it.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: The tag is the package version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "::error::Tag $GITHUB_REF_NAME, package.json $version"; exit 1; }
+          grep -q "^CI_LOCAL_VERSION=\"$version\"$" bin/ci-local || { echo "::error::bin/ci-local is not at $version"; exit 1; }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm publish

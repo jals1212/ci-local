@@ -1,0 +1,627 @@
+#!/usr/bin/env bash
+#
+# ci-local: run a GitHub Actions workflow's steps on this machine, in Linux,
+# without touching the development stack. See README.md.
+#
+# The project describes its plan in `ci-local.config.sh` at the repository
+# root (or the file named by CI_LOCAL_CONFIG). This file is the engine: options,
+# the Linux runner, running the plan, the summary and the cleanup.
+#
+# Bash 3.2 compatible (the one macOS ships): no associative arrays, and every
+# expansion of a possibly empty array is guarded for `set -u`.
+
+set -euo pipefail
+
+CI_LOCAL_VERSION="0.1.0"
+NL=$'\n'
+CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+
+# ------------------------------------------------------------ the project
+
+find_repo() {
+  local dir
+  dir="$(pwd -P)"
+  while [[ "$dir" != / ]]; do
+    if [[ -f "$dir/${CI_LOCAL_CONFIG:-ci-local.config.sh}" ]]; then
+      echo "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+die_usage() {
+  echo "ci-local: $*" >&2
+  echo "Try: ci-local --help" >&2
+  exit 2
+}
+
+# ------------------------------------------------- the configuration API
+#
+# The config sets these variables and calls these functions. Everything that
+# starts with `ci_` or `CI_` is the engine's; the project's own helpers should
+# use another prefix.
+
+CI_PROJECT=""          # prefix of every container, network, volume and image (required)
+CI_JOBS=()             # names --only selects from (required)
+CI_NETWORK=""          # the network the runner joins; default: $CI_PROJECT
+CI_RUNNER_DOCKERFILE="" # optional, relative to the repo: FROM ${CI_LOCAL_BASE}
+CI_HIDE_FILES=(.env .env.local)
+CI_RUNNER_ARGS=()      # extra `docker run` arguments for the runner
+CI_WORKFLOW=".github/workflows/ci.yml"
+
+PLAN_KINDS=()
+PLAN_NAMES=()
+PLAN_JOBS=()
+PLAN_TAGS=()
+PLAN_TIMEOUTS=()
+PLAN_ENVS=()   # newline-separated KEY=VALUE
+PLAN_PASS=()   # newline-separated variable names taken from the host
+PLAN_ARGS=()   # host steps: the arguments, separated by US (\037)
+PLAN_CMDS=()
+
+ENV_SET_NAMES=()
+ENV_SET_VALUES=()  # newline-separated KEY=VALUE, parallel to ENV_SET_NAMES
+
+NOT_MIRRORED_NAMES=()
+NOT_MIRRORED_REASONS=()
+
+# ci_env NAME KEY=VALUE...   Defines (or extends) a named set of variables.
+ci_env() {
+  local name=$1 i
+  shift
+  for i in ${ENV_SET_NAMES[@]+"${!ENV_SET_NAMES[@]}"}; do
+    if [[ "${ENV_SET_NAMES[$i]}" == "$name" ]]; then
+      local entry
+      for entry in "$@"; do ENV_SET_VALUES[i]+="$entry"$'\n'; done
+      return 0
+    fi
+  done
+  local joined="" entry
+  for entry in "$@"; do joined+="$entry"$'\n'; done
+  ENV_SET_NAMES+=("$name")
+  ENV_SET_VALUES+=("$joined")
+}
+
+env_set() {
+  local i
+  for i in ${ENV_SET_NAMES[@]+"${!ENV_SET_NAMES[@]}"}; do
+    [[ "${ENV_SET_NAMES[$i]}" != "$1" ]] || { printf '%s' "${ENV_SET_VALUES[$i]}"; return 0; }
+  done
+  echo "ci-local: no environment set named '$1' (ci_env)" >&2
+  exit 2
+}
+
+# ci_not_mirrored "Workflow step name" "why, and what runs instead"
+ci_not_mirrored() {
+  NOT_MIRRORED_NAMES+=("$1")
+  NOT_MIRRORED_REASONS+=("$2")
+}
+
+# ci_step KIND NAME [options] COMMAND [ARGS...]
+#   KIND box   COMMAND is a shell script run in the runner, from the repo root,
+#              with `bash -eo pipefail` as GitHub runs a `run:` step.
+#   KIND host  COMMAND is a function of the config, run on this machine with
+#              ARGS, in a subshell with `set -e` in force.
+#   --job J1,J2   only when one of these jobs is selected (default: always)
+#   --env SET     add a set defined with ci_env (repeatable)
+#   --set K=V     add one variable (repeatable)
+#   --pass NAME   pass a variable from this machine's environment, by name only,
+#                 so its value is never written into the container (repeatable)
+#   --timeout S   kill the step after S seconds (box steps)
+#   --tag TAG     a tag --skip can name (repeatable)
+ci_step() {
+  [[ $# -ge 3 ]] || { echo "ci_step: KIND NAME COMMAND required" >&2; exit 2; }
+  local kind=$1 name=$2 job="" tags="" timeout="" env="" pass=""
+  shift 2
+  case "$kind" in box | host) ;; *) echo "ci_step: kind must be box or host, got '$kind'" >&2; exit 2 ;; esac
+  while [[ $# -gt 0 && "$1" == --* ]]; do
+    case "$1" in
+      --job) job=$2; shift 2 ;;
+      --env) env+="$(env_set "$2")"$'\n'; shift 2 ;;
+      --set) env+="$2"$'\n'; shift 2 ;;
+      --pass) pass+="$2"$'\n'; shift 2 ;;
+      --timeout) timeout=$2; shift 2 ;;
+      --tag) tags+=",$2"; shift 2 ;;
+      --) shift; break ;;
+      *) echo "ci_step '$name': unknown option $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ $# -ge 1 ]] || { echo "ci_step '$name': no command" >&2; exit 2; }
+  local cmd=$1
+  shift
+  local raw_args=""
+  if [[ $kind == host ]]; then
+    declare -F "$cmd" >/dev/null || { echo "ci_step '$name': '$cmd' is not a function" >&2; exit 2; }
+    local arg
+    for arg in "$@"; do
+      cmd+=" $(printf '%q' "$arg")"
+      raw_args+="$arg"$'\037'
+    done
+  fi
+  if [[ -n "$job" ]]; then
+    local j
+    IFS=',' read -r -a wanted <<<"$job"
+    for j in "${wanted[@]}"; do
+      [[ " ${CI_JOBS[*]} " == *" $j "* ]] || { echo "ci_step '$name': unknown job '$j'" >&2; exit 2; }
+    done
+  fi
+  PLAN_KINDS+=("$kind")
+  PLAN_NAMES+=("$name")
+  PLAN_JOBS+=("$job")
+  PLAN_TAGS+=("${tags#,}")
+  PLAN_TIMEOUTS+=("$timeout")
+  PLAN_ENVS+=("$env")
+  PLAN_PASS+=("$pass")
+  PLAN_ARGS+=("$raw_args")
+  PLAN_CMDS+=("$cmd")
+}
+
+# True when JOB was selected with --only (or nothing was).
+ci_selected() { [[ " ${SELECTED[*]} " == *" $1 "* ]]; }
+
+
+# ------------------------------------------------------- engine host steps
+
+base_image_tag() {
+  echo "ci-local-base:${NODE_VERSION}-$(cksum <"$CI_LOCAL_HOME/docker/Dockerfile" | cut -d' ' -f1)"
+}
+
+runner_image_tag() {
+  local sum
+  if [[ -n "$CI_RUNNER_DOCKERFILE" ]]; then
+    sum="$(cat "$CI_LOCAL_HOME/docker/Dockerfile" "$REPO/$CI_RUNNER_DOCKERFILE" | cksum | cut -d' ' -f1)"
+    echo "$CI_PROJECT-runner:${NODE_VERSION}-$sum"
+  else
+    base_image_tag
+  fi
+}
+
+# Host step: build the runner image when missing (or with --rebuild).
+ci_build_runner() {
+  local base runner
+  base="$(base_image_tag)"
+  runner="$(runner_image_tag)"
+  if [[ $REBUILD -eq 0 ]] && docker image inspect "$runner" >/dev/null 2>&1; then
+    echo "Runner image $runner is present."
+    return 0
+  fi
+  if [[ $REBUILD -eq 1 ]] || ! docker image inspect "$base" >/dev/null 2>&1; then
+    echo "Building $base (node:${NODE_VERSION}-bookworm, Docker client, sudo)"
+    docker build --quiet --build-arg "NODE_VERSION=$NODE_VERSION" --tag "$base" \
+      "$CI_LOCAL_HOME/docker" >/dev/null
+  fi
+  if [[ -n "$CI_RUNNER_DOCKERFILE" ]]; then
+    echo "Building $runner from $CI_RUNNER_DOCKERFILE"
+    docker build --quiet --build-arg "CI_LOCAL_BASE=$base" --tag "$runner" \
+      --file "$REPO/$CI_RUNNER_DOCKERFILE" "$(dirname "$REPO/$CI_RUNNER_DOCKERFILE")" >/dev/null
+  fi
+}
+
+# Host step: start the runner container on $CI_NETWORK.
+ci_start_runner() {
+  docker rm -f -v "$RUNNER" >/dev/null 2>&1 || true
+  docker network inspect "$CI_NETWORK" >/dev/null 2>&1 ||
+    docker network create --label "$CI_LABEL" "$CI_NETWORK" >/dev/null
+  local args=(
+    run --detach --init --name "$RUNNER" --network "$CI_NETWORK"
+    --label "$CI_LABEL"
+    # The checkout at its host path, so paths handed to the host's daemon (a
+    # build context, a bind mount) mean the same there.
+    --workdir "$REPO" --volume "$REPO:$REPO"
+    # Never the host's node_modules, built for another system.
+    --volume "$CI_PROJECT-node-modules:$REPO/node_modules"
+    --volume "$CI_PROJECT-npm-cache:/home/runner/.npm"
+    --volume "$CI_PROJECT-cache:/home/runner/.cache"
+    --volume "$DOCKER_SOCK:/var/run/docker.sock"
+    # What GitHub's runner sets.
+    --env CI=true --env RUNNER_TEMP=/tmp
+  )
+  # The hosted runner checks out no ignored file: hide this checkout's.
+  local file
+  for file in ${CI_HIDE_FILES[@]+"${CI_HIDE_FILES[@]}"}; do
+    [[ ! -f "$REPO/$file" ]] || args+=(--volume "$CI_LOCAL_HOME/docker/empty:$REPO/$file:ro")
+  done
+  args+=(${CI_RUNNER_ARGS[@]+"${CI_RUNNER_ARGS[@]}"})
+  docker "${args[@]}" "$(runner_image_tag)" sleep infinity >/dev/null
+
+  # An ordinary user, as on the hosted runner: the host user's uid and gid, so
+  # files written in the checkout stay the developer's, in the group that owns
+  # the Docker socket as the runner sees it, with sudo as on GitHub.
+  local sock_gid
+  sock_gid="$(docker exec "$RUNNER" stat -c %g /var/run/docker.sock)"
+  docker exec --user root "$RUNNER" bash -euc '
+    uid=$1; gid=$2; sock_gid=$3; repo=$4
+    getent group "$gid" >/dev/null || groupadd -o -g "$gid" hostgroup
+    getent group "$sock_gid" >/dev/null || groupadd -o -g "$sock_gid" hostdocker
+    useradd -o -u "$uid" -g "$gid" -d /home/runner -s /bin/bash runner
+    usermod -aG "$(getent group "$sock_gid" | cut -d: -f1)" runner
+    # The cache volumes outlive runs; an earlier one may have written as another user.
+    chown "$uid:$gid" /home/runner "$repo/node_modules"
+    chown -R "$uid:$gid" /home/runner/.npm /home/runner/.cache
+    # Docker also names ::1 localhost, and a server told to listen on localhost
+    # may then listen on IPv6 alone while clients dial 127.0.0.1. On the hosted
+    # runner localhost is 127.0.0.1 only. A bind mount: rewritten in place.
+    hosts="$(awk '\''$1 == "::1" { line = $1; for (i = 2; i <= NF; i++) if ($i != "localhost") line = line " " $i; print line; next } { print }'\'' /etc/hosts)"
+    printf "%s\n" "$hosts" > /etc/hosts
+  ' _ "$(id -u)" "$(id -g)" "$sock_gid" "$REPO"
+  docker exec --user runner "$RUNNER" sh -c 'echo "runner: $(id -un) (uid $(id -u)), node $(node -v), $(docker --version)"'
+}
+
+# Remove everything labelled for this project, the runner and the
+# node_modules volume. Caches (npm, ~/.cache) and images stay.
+teardown() {
+  local ids
+  [[ "$(type -t ci_teardown)" != function ]] || ci_teardown || true
+  docker rm -f -v "$RUNNER" >/dev/null 2>&1 || true
+  ids="$(docker ps -aq --filter "label=$CI_LABEL")"
+  # shellcheck disable=SC2086
+  [[ -z "$ids" ]] || docker rm -f -v $ids >/dev/null 2>&1 || true
+  ids="$(docker network ls -q --filter "label=$CI_LABEL")"
+  # shellcheck disable=SC2086
+  [[ -z "$ids" ]] || docker network rm $ids >/dev/null 2>&1 || true
+  ids="$(docker volume ls -q --filter "label=$CI_LABEL")"
+  # shellcheck disable=SC2086
+  [[ -z "$ids" ]] || docker volume rm -f $ids >/dev/null 2>&1 || true
+  docker volume rm -f "$CI_PROJECT-node-modules" >/dev/null 2>&1 || true
+}
+
+# The containers compose started from this checkout under another project:
+# the development stack. Name, id and start time, so a restart shows.
+dev_snapshot() {
+  local id
+  while read -r id; do
+    [[ -n "$id" ]] || continue
+    docker inspect \
+      --format '{{index .Config.Labels "com.docker.compose.project"}} {{.Name}} {{.Id}} {{.State.StartedAt}}' "$id"
+  done < <(docker ps -aq --filter "label=com.docker.compose.project.working_dir=$REPO") |
+    { grep -v "^$CI_PROJECT " || true; } | sort
+}
+
+# ---------------------------------------------------------------- output
+
+fmt_duration() {
+  local s=$1
+  if [[ $s -ge 60 ]]; then printf '%dm%02ds' $((s / 60)) $((s % 60)); else printf '%ds' "$s"; fi
+}
+
+json_string() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\t'/\\t}
+  s=${s//$'\r'/\\r}
+  printf '"%s"' "$s"
+}
+
+json_lines() {
+  local first=1 line
+  printf '['
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    [[ $first -eq 1 ]] || printf ','
+    first=0
+    json_string "$line"
+  done <<<"$1"
+  printf ']'
+}
+
+json_array() {
+  local first=1 item
+  printf '['
+  for item in "$@"; do
+    [[ $first -eq 1 ]] || printf ','
+    first=0
+    json_string "$item"
+  done
+  printf ']'
+}
+
+# The plan as JSON, for parity checks: `@jals1212/ci-local/parity`.
+print_plan() {
+  local i fn
+  printf '{"version":%s,"project":%s,"workflow":%s,"jobs":' \
+    "$(json_string "$CI_LOCAL_VERSION")" "$(json_string "$CI_PROJECT")" "$(json_string "$CI_WORKFLOW")"
+  json_array "${CI_JOBS[@]}"
+  printf ',"runnerArgs":'
+  json_array ${CI_RUNNER_ARGS[@]+"${CI_RUNNER_ARGS[@]}"}
+  printf ',"notMirrored":['
+  for i in ${NOT_MIRRORED_NAMES[@]+"${!NOT_MIRRORED_NAMES[@]}"}; do
+    [[ $i -eq 0 ]] || printf ','
+    printf '{"name":%s,"reason":%s}' "$(json_string "${NOT_MIRRORED_NAMES[$i]}")" "$(json_string "${NOT_MIRRORED_REASONS[$i]}")"
+  done
+  printf '],"steps":['
+  for i in ${PLAN_NAMES[@]+"${!PLAN_NAMES[@]}"}; do
+    [[ $i -eq 0 ]] || printf ','
+    printf '{"kind":%s,"name":%s,"jobs":' "$(json_string "${PLAN_KINDS[$i]}")" "$(json_string "${PLAN_NAMES[$i]}")"
+    json_lines "${PLAN_JOBS[$i]//,/$NL}"
+    printf ',"tags":'
+    json_lines "${PLAN_TAGS[$i]//,/$NL}"
+    printf ',"timeout":%s,"env":' "${PLAN_TIMEOUTS[$i]:-null}"
+    json_lines "${PLAN_ENVS[$i]}"
+    printf ',"pass":'
+    json_lines "${PLAN_PASS[$i]}"
+    printf ',"command":%s' "$(json_string "${PLAN_CMDS[$i]}")"
+    if [[ "${PLAN_KINDS[$i]}" == host ]]; then
+      fn="${PLAN_CMDS[$i]%% *}"
+      printf ',"args":'
+      json_lines "${PLAN_ARGS[$i]//$'\037'/$NL}"
+      printf ',"source":%s' "$(json_string "$(declare -f "$fn")")"
+    fi
+    printf '}'
+  done
+  printf ']}\n'
+}
+
+usage() {
+  cat <<USAGE
+Usage: ci-local [options]
+
+Runs the steps of ${CI_WORKFLOW:-the workflow} in a Linux runner container, on a
+private network, as described in ci-local.config.sh. The development stack is
+not touched, and that is checked at the end.
+
+Options:
+  --only JOBS     Run only these jobs, comma separated (${CI_JOBS[*]:-see the config}).
+  --skip TAGS     Leave out the steps with these tags, comma separated.
+  --keep          Leave the runner and the services up afterwards
+                  (docker exec -it ${CI_PROJECT:-<project>}-runner bash). --down removes them.
+  --down          Remove what --keep left, and exit.
+  --rebuild       Rebuild the runner image even if it exists.
+  --list          Print the steps that would run, and exit.
+  --print-plan    Print the whole plan as JSON (for parity checks), and exit.
+  --version       Print the version, and exit.
+  -h, --help      This text.
+
+Exit status: 0 when every step passed, 1 on the first failing step (named in
+the summary), 2 on a usage or configuration error.
+USAGE
+}
+
+# ---------------------------------------------------------------- options
+
+ONLY=""
+SKIP=""
+KEEP=0
+DOWN_ONLY=0
+REBUILD=0
+LIST_ONLY=0
+PRINT_PLAN=0
+HELP=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --only) [[ $# -ge 2 && -n "$2" ]] || die_usage "--only needs a value"; ONLY=$2; shift 2 ;;
+    --only=*) ONLY=${1#--only=}; [[ -n "$ONLY" ]] || die_usage "--only needs a value"; shift ;;
+    --skip) [[ $# -ge 2 && -n "$2" ]] || die_usage "--skip needs a value"; SKIP=$2; shift 2 ;;
+    --skip=*) SKIP=${1#--skip=}; [[ -n "$SKIP" ]] || die_usage "--skip needs a value"; shift ;;
+    --keep) KEEP=1; shift ;;
+    --down) DOWN_ONLY=1; shift ;;
+    --rebuild) REBUILD=1; shift ;;
+    --list) LIST_ONLY=1; shift ;;
+    --print-plan) PRINT_PLAN=1; shift ;;
+    --version) echo "ci-local $CI_LOCAL_VERSION"; exit 0 ;;
+    -h | --help) HELP=1; shift ;;
+    *) die_usage "unknown option: $1" ;;
+  esac
+done
+
+REPO="$(find_repo)" || {
+  [[ $HELP -eq 0 ]] || { usage; exit 0; }
+  echo "ci-local: no ${CI_LOCAL_CONFIG:-ci-local.config.sh} here or in a parent directory" >&2
+  exit 2
+}
+cd "$REPO"
+
+# shellcheck disable=SC1090
+source "$REPO/${CI_LOCAL_CONFIG:-ci-local.config.sh}"
+
+[[ $HELP -eq 0 ]] || { usage; exit 0; }
+
+[[ "$CI_PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
+  { echo "ci-local: CI_PROJECT must be a lowercase name, got '$CI_PROJECT'" >&2; exit 2; }
+[[ ${#CI_JOBS[@]} -gt 0 ]] || { echo "ci-local: CI_JOBS is empty" >&2; exit 2; }
+[[ "$(type -t ci_plan)" == function ]] || { echo "ci-local: the config defines no ci_plan function" >&2; exit 2; }
+CI_NETWORK="${CI_NETWORK:-$CI_PROJECT}"
+# Put on whatever a host step creates (`docker run --label "$CI_LABEL"`), so
+# the cleanup finds and removes it.
+CI_LABEL="ci-local.project=$CI_PROJECT"
+RUNNER="$CI_PROJECT-runner"
+DOCKER_SOCK="${CI_LOCAL_DOCKER_SOCK:-/var/run/docker.sock}"
+
+[[ -f "$REPO/.nvmrc" ]] || { echo "ci-local: no .nvmrc in $REPO" >&2; exit 2; }
+NODE_VERSION="$(tr -d '[:space:]' <"$REPO/.nvmrc")"
+NODE_VERSION="${NODE_VERSION#v}"
+[[ "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  { echo "ci-local: .nvmrc must name an exact version such as 24.16.0 (got '$NODE_VERSION')" >&2; exit 2; }
+
+SELECTED=("${CI_JOBS[@]}")
+if [[ -n "$ONLY" ]]; then
+  [[ "$ONLY" =~ ^[a-z0-9_-]+(,[a-z0-9_-]+)*$ ]] || die_usage "--only takes job names separated by commas, got '$ONLY'"
+  IFS=',' read -r -a requested <<<"$ONLY"
+  for name in "${requested[@]}"; do
+    [[ " ${CI_JOBS[*]} " == *" $name "* ]] || die_usage "unknown job '$name' (one of: ${CI_JOBS[*]})"
+  done
+  # Always the config's order, whatever order was asked for.
+  SELECTED=()
+  for job in "${CI_JOBS[@]}"; do
+    [[ ",$ONLY," != *",$job,"* ]] || SELECTED+=("$job")
+  done
+fi
+
+ci_plan
+
+# The steps that run: those of a selected job, without a skipped tag.
+RUN_INDEXES=()
+for i in ${PLAN_NAMES[@]+"${!PLAN_NAMES[@]}"}; do
+  keep=1
+  if [[ -n "${PLAN_JOBS[$i]}" ]]; then
+    keep=0
+    IFS=',' read -r -a step_jobs <<<"${PLAN_JOBS[$i]}"
+    for job in "${step_jobs[@]}"; do ci_selected "$job" && keep=1; done
+  fi
+  if [[ $keep -eq 1 && -n "$SKIP" && -n "${PLAN_TAGS[$i]}" ]]; then
+    IFS=',' read -r -a step_tags <<<"${PLAN_TAGS[$i]}"
+    for tag in "${step_tags[@]}"; do [[ ",$SKIP," != *",$tag,"* ]] || keep=0; done
+  fi
+  [[ $keep -eq 0 ]] || RUN_INDEXES+=("$i")
+done
+
+if [[ $PRINT_PLAN -eq 1 ]]; then print_plan; exit 0; fi
+
+if [[ $LIST_ONLY -eq 1 ]]; then
+  n=0
+  for i in ${RUN_INDEXES[@]+"${RUN_INDEXES[@]}"}; do
+    n=$((n + 1))
+    printf '%2d. [%s] %s\n' "$n" "${PLAN_KINDS[$i]}" "${PLAN_NAMES[$i]}"
+  done
+  exit 0
+fi
+
+command -v docker >/dev/null || { echo "ci-local: docker is not installed" >&2; exit 2; }
+docker version --format '{{.Server.Version}}' >/dev/null 2>&1 ||
+  { echo "ci-local: the docker daemon is not reachable" >&2; exit 2; }
+
+if [[ $DOWN_ONLY -eq 1 ]]; then
+  teardown
+  echo "Removed what project $CI_PROJECT left."
+  exit 0
+fi
+
+[[ "$(type -t ci_preflight)" != function ]] || ci_preflight
+
+# -------------------------------------------------------------------- run
+
+RESULTS=()
+DURATIONS=()
+FAILED_STEP=""
+SUMMARY_PRINTED=0
+PLAN_STARTED=0
+STARTED=$SECONDS
+DEV_BEFORE=""
+
+print_summary() {
+  local i n=0
+  SUMMARY_PRINTED=1
+  echo
+  echo "ci-local summary: node ${NODE_VERSION}, project ${CI_PROJECT}, jobs: ${SELECTED[*]}${SKIP:+, skipped tags: $SKIP}"
+  for i in ${RUN_INDEXES[@]+"${RUN_INDEXES[@]}"}; do
+    printf '  %-8s %-58s %s\n' "${RESULTS[$n]:-not run}" "${PLAN_NAMES[$i]}" "${DURATIONS[$n]:-}"
+    n=$((n + 1))
+  done
+  echo "  total $(fmt_duration $((SECONDS - STARTED)))"
+  if [[ -n "$FAILED_STEP" ]]; then
+    echo "FAILED at step: $FAILED_STEP"
+  else
+    echo "PASSED: every step ran and passed. This is not the GitHub check."
+  fi
+}
+
+run_step() {
+  local i=$1 line
+  if [[ "${PLAN_KINDS[$i]}" == host ]]; then
+    # A subshell outside any `||`, so `set -e` holds inside the function.
+    (
+      set -e
+      eval "${PLAN_CMDS[$i]}"
+    ) &
+    wait $!
+    return
+  fi
+  local args=(exec --user runner --workdir "$REPO")
+  while IFS= read -r line; do [[ -z "$line" ]] || args+=(--env "$line"); done <<<"${PLAN_ENVS[$i]}"
+  while IFS= read -r line; do [[ -z "$line" ]] || args+=(--env "$line"); done <<<"${PLAN_PASS[$i]}"
+  args+=("$RUNNER")
+  [[ -z "${PLAN_TIMEOUTS[$i]}" ]] || args+=(timeout --kill-after=30 "${PLAN_TIMEOUTS[$i]}")
+  # In the background and waited for, so an interrupt is handled at once and
+  # the cleanup removes the runner, which ends the step.
+  docker "${args[@]}" bash -eo pipefail -c "${PLAN_CMDS[$i]}" &
+  wait $!
+}
+
+run_plan() {
+  local total=${#RUN_INDEXES[@]} n=0 i began elapsed code
+  for i in ${RUN_INDEXES[@]+"${RUN_INDEXES[@]}"}; do
+    echo
+    echo "==> [$((n + 1))/$total] ${PLAN_NAMES[$i]}"
+    began=$SECONDS
+    set +e
+    run_step "$i"
+    code=$?
+    set -e
+    elapsed=$((SECONDS - began))
+    DURATIONS[n]="$(fmt_duration "$elapsed")"
+    if [[ $code -eq 0 ]]; then
+      RESULTS[n]="ok"
+      echo "<== ${PLAN_NAMES[$i]}: ok ($(fmt_duration "$elapsed"))"
+    else
+      RESULTS[n]="FAILED"
+      FAILED_STEP="${PLAN_NAMES[$i]}"
+      if [[ -n "${PLAN_TIMEOUTS[$i]}" && ($code -eq 124 || $code -eq 137) ]]; then
+        echo "<== ${PLAN_NAMES[$i]}: TIMED OUT after $(fmt_duration "${PLAN_TIMEOUTS[$i]}")" >&2
+      else
+        echo "<== ${PLAN_NAMES[$i]}: FAILED with exit code $code ($(fmt_duration "$elapsed"))" >&2
+      fi
+      return 1
+    fi
+    n=$((n + 1))
+  done
+}
+
+finish() {
+  local status=$?
+  trap - EXIT INT TERM
+  set +e
+  if [[ $PLAN_STARTED -eq 1 && $SUMMARY_PRINTED -eq 0 ]]; then
+    FAILED_STEP="${FAILED_STEP:-interrupted}"
+    print_summary
+    [[ $status -ne 0 ]] || status=1
+  fi
+  if [[ -n "$FAILED_STEP" ]]; then
+    echo
+    echo "Containers of project $CI_PROJECT at the failure:"
+    docker ps -a --filter "label=$CI_LABEL" --format '  {{.Names}}  {{.Status}}'
+  fi
+  echo
+  if [[ $KEEP -eq 1 ]]; then
+    echo "Kept: project $CI_PROJECT is still up. Remove it with: ci-local --down"
+  else
+    echo "Removing project $CI_PROJECT (runner, services, network, node_modules volume)"
+    teardown
+  fi
+  if [[ -n "$DEV_BEFORE" ]]; then
+    local after
+    after="$(dev_snapshot)"
+    if [[ "$after" == "$DEV_BEFORE" ]]; then
+      echo "Development stack untouched: $(grep -c . <<<"$DEV_BEFORE") container(s), same ids and start times as before."
+    else
+      echo "WARNING: the development stack changed during this run:" >&2
+      diff <(echo "$DEV_BEFORE") <(echo "$after") >&2
+      [[ $status -ne 0 ]] || status=1
+    fi
+  fi
+  exit "$status"
+}
+
+DEV_BEFORE="$(dev_snapshot)"
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+echo "ci-local $CI_LOCAL_VERSION: ${#RUN_INDEXES[@]} steps, node ${NODE_VERSION}, project ${CI_PROJECT}, jobs: ${SELECTED[*]}"
+if [[ -n "$DEV_BEFORE" ]]; then
+  echo "Development stack, left alone:"
+  while read -r line; do echo "  ${line:0:100}"; done <<<"$DEV_BEFORE"
+fi
+# A run left by --keep, or one that was killed: always start clean.
+teardown
+PLAN_STARTED=1
+# Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
+# subshells included, and host steps rely on it.
+set +e
+run_plan
+set -e
+print_summary
+[[ -z "$FAILED_STEP" ]]
