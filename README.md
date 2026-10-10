@@ -125,7 +125,8 @@ test('ci-local runs what the workflow runs', async () => {
 - `mirroringProblems(plan, workflow, { substitutions })`: every `run:` step of
   every job is a box step with the same commands (comments, blank lines and
   `\` continuations aside), in the workflow's order within each job, or is named
-  with `ci_not_mirrored`; and every `ci_not_mirrored` names a real step.
+  with `ci_not_mirrored`, or is stood for by a step declared `--deviates`;
+  and every `ci_not_mirrored` and `--deviates` names a real step.
   `substitutions` are `[from, to]` pairs for deliberate differences, such as a
   container name.
 - `publishedPortProblems(plan)`: neither the runner nor any `docker run` in a
@@ -177,6 +178,7 @@ on your machine, with `set -e` in force. Options:
 | `--pass NAME`   | Pass a variable from your environment by name: its value is never written into the container's configuration. |
 | `--timeout S`   | Kill a box step after S seconds.                                                 |
 | `--tag TAG`     | A tag `--skip` can name (for example `network`, to work offline).                |
+| `--deviates R`  | The step stands for the workflow step of the same name (or first command line) but runs another command on purpose, for reason R. The parity check accepts it in that position; R appears in `--print-plan`. |
 
 ## What it leaves on your machine
 

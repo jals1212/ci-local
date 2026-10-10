@@ -5,6 +5,8 @@ export interface PlanStep {
   jobs: string[]
   tags: string[]
   timeout: number | null
+  /** Why the step runs another command than its workflow step (`--deviates`). */
+  deviates: string | null
   /** KEY=VALUE entries. */
   env: string[]
   /** Variables passed from the host by name. */

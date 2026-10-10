@@ -23,4 +23,6 @@ ci_plan() {
   ci_step host "Start the database" --job tests start_database postgres:17 "pg_isready -U postgres"
   ci_step box "Create the database" --job tests 'docker exec fixture-ci-db createdb -U postgres app'
   ci_step box "npm test" --job tests --env tests --set EXTRA=1 'npm test'
+  ci_step box "npm run e2e" --job tests --deviates "leaves out the spec that needs the host network" \
+    'npm run e2e -- --exclude host_network.spec.ts'
 }

@@ -60,6 +60,10 @@ export function stepEnv(step) {
  * runs them in the workflow's order; and every name given to ci_not_mirrored
  * is a step of the workflow.
  *
+ * A box step declared with `--deviates REASON` stands for the workflow step
+ * whose name (or, unnamed, first command line) equals the step's name: it is
+ * accepted in that position whatever its command, and REASON is in the plan.
+ *
  * `substitutions` are [from, to] pairs applied to the workflow's commands
  * first, for the differences the project makes on purpose (a container name).
  */
@@ -67,6 +71,9 @@ export function mirroringProblems(plan, workflow, { substitutions = [] } = {}) {
   const problems = []
   const skipped = new Set(plan.notMirrored.map((entry) => entry.name))
   const box = plan.steps.map((step) => (step.kind === 'box' ? normalize(step.command) : null))
+  // Steps that stand for a workflow step under its name, with another command.
+  const deviating = plan.steps.map((step) => (step.kind === 'box' && step.deviates ? step.name : null))
+  const deviationsUsed = new Set()
   const names = new Set()
 
   for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
@@ -77,16 +84,25 @@ export function mirroringProblems(plan, workflow, { substitutions = [] } = {}) {
       let command = step.run
       for (const [from, to] of substitutions) command = command.split(from).join(to)
       const wanted = normalize(command)
-      const after = box.findIndex((candidate, index) => index > last && candidate === wanted)
+      const stepLabel = label(step)
+      const exact = box.findIndex((candidate, index) => index > last && candidate === wanted)
+      const declared = deviating.findIndex((candidate, index) => index > last && candidate === stepLabel)
+      const after = exact !== -1 ? exact : declared
+      if (exact === -1 && declared !== -1) deviationsUsed.add(declared)
       if (after !== -1) {
         last = after
-      } else if (box.includes(wanted)) {
+      } else if (box.includes(wanted) || deviating.includes(stepLabel)) {
         problems.push(`${jobName}: "${label(step)}" runs out of the workflow's order`)
       } else {
         problems.push(`${jobName}: "${label(step)}" is not in the plan (nor named with ci_not_mirrored)`)
       }
     }
   }
+  deviating.forEach((name, index) => {
+    if (name !== null && !deviationsUsed.has(index)) {
+      problems.push(`"${name}" is declared --deviates, but no workflow step it stands for was found by that name`)
+    }
+  })
   for (const name of skipped) {
     if (!names.has(name)) problems.push(`ci_not_mirrored names "${name}", which is no step of the workflow`)
   }

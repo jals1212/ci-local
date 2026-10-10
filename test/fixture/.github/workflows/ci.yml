@@ -30,3 +30,4 @@ jobs:
           docker exec db
           createdb -U postgres app
       - run: npm test
+      - run: npm run e2e

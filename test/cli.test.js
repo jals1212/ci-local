@@ -52,6 +52,7 @@ test('--list names every step, in the plan order', () => {
     '[host] Start the database',
     '[box] Create the database',
     '[box] npm test',
+    '[box] npm run e2e',
   ])
 })
 
@@ -64,6 +65,7 @@ test('--only keeps the steps of no job and those of the named jobs', () => {
     '[host] Start the database',
     '[box] Create the database',
     '[box] npm test',
+    '[box] npm run e2e',
   ])
 })
 
@@ -102,6 +104,7 @@ test('a config error is a status 2, before anything runs', () => {
     'unknown step option': 'CI_PROJECT=p\nCI_JOBS=(a)\nci_plan() { ci_step box x --nope "true"; }\n',
     'unknown job': 'CI_PROJECT=p\nCI_JOBS=(a)\nci_plan() { ci_step box x --job b "true"; }\n',
     'unknown env set': 'CI_PROJECT=p\nCI_JOBS=(a)\nci_plan() { ci_step box x --env none "true"; }\n',
+    '--deviates without a reason': 'CI_PROJECT=p\nCI_JOBS=(a)\nci_plan() { ci_step box x --deviates "" "true"; }\n',
     'host step not a function': 'CI_PROJECT=p\nCI_JOBS=(a)\nci_plan() { ci_step host x nothing_here; }\n',
     'no ci_plan': 'CI_PROJECT=p\nCI_JOBS=(a)\n',
     'no jobs': 'CI_PROJECT=p\nci_plan() { :; }\n',
@@ -125,13 +128,18 @@ test('--print-plan is the whole plan as JSON, whatever --only says', () => {
   const plan = JSON.parse(ciLocal(['--print-plan', '--only', 'quality']).out)
   assert.equal(plan.project, 'fixture-ci')
   assert.deepEqual(plan.jobs, ['quality', 'tests'])
-  assert.equal(plan.steps.length, 8)
+  assert.equal(plan.steps.length, 9)
   assert.deepEqual(plan.notMirrored, [
     { name: 'Start the database', reason: 'start_database: on the private network, no published port' },
   ])
   const test = plan.steps.find((step) => step.name === 'npm test')
   assert.deepEqual(test.env, ['NODE_ENV=test', 'DB_HOST=db', 'EXTRA=1'])
   assert.deepEqual(test.jobs, ['tests'])
+  assert.equal(test.deviates, null)
+  assert.equal(
+    plan.steps.find((step) => step.name === 'npm run e2e').deviates,
+    'leaves out the spec that needs the host network'
+  )
   const audit = plan.steps.find((step) => step.name === 'Audit')
   assert.deepEqual(audit.pass, ['NPM_TOKEN'])
   assert.deepEqual(audit.tags, ['audit'])

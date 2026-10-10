@@ -98,3 +98,29 @@ test('stepEnv turns the env entries into an object', async () => {
     EXTRA: '1',
   })
 })
+
+test('a step declared --deviates stands for its workflow step, whatever its command', async () => {
+  const { plan, workflow } = await fixture()
+  const e2e = plan.steps.find((step) => step.name === 'npm run e2e')
+  assert.notEqual(e2e.command, 'npm run e2e')
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [])
+  e2e.deviates = null
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [
+    'tests: "npm run e2e" is not in the plan (nor named with ci_not_mirrored)',
+  ])
+})
+
+test('a --deviates step must name a workflow step, in order', async () => {
+  const { plan, workflow } = await fixture()
+  plan.steps.find((step) => step.name === 'npm run e2e').name = 'npm run gone'
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [
+    'tests: "npm run e2e" is not in the plan (nor named with ci_not_mirrored)',
+    '"npm run gone" is declared --deviates, but no workflow step it stands for was found by that name',
+  ])
+  const steps = workflow.jobs.tests.steps
+  plan.steps.find((step) => step.name === 'npm run gone').name = 'npm run e2e'
+  steps.splice(steps.length - 2, 0, steps.pop())
+  assert.deepEqual(mirroringProblems(plan, workflow, { substitutions: SUBSTITUTIONS }), [
+    'tests: "npm test" runs out of the workflow\'s order',
+  ])
+})

@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-CI_LOCAL_VERSION="0.1.2"
+CI_LOCAL_VERSION="0.1.3"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
@@ -56,6 +56,7 @@ PLAN_NAMES=()
 PLAN_JOBS=()
 PLAN_TAGS=()
 PLAN_TIMEOUTS=()
+PLAN_DEVIATES=() # why a step runs another command than its workflow step
 PLAN_ENVS=()   # newline-separated KEY=VALUE
 PLAN_PASS=()   # newline-separated variable names taken from the host
 PLAN_ARGS=()   # host steps: the arguments, separated by US (\037)
@@ -111,9 +112,12 @@ ci_not_mirrored() {
 #                 so its value is never written into the container (repeatable)
 #   --timeout S   kill the step after S seconds (box steps)
 #   --tag TAG     a tag --skip can name (repeatable)
+#   --deviates R  a box step that stands for the workflow step of the same
+#                 name (or first command line) but runs another command on
+#                 purpose, for reason R; the parity check accepts it by name
 ci_step() {
   [[ $# -ge 3 ]] || { echo "ci_step: KIND NAME COMMAND required" >&2; exit 2; }
-  local kind=$1 name=$2 job="" tags="" timeout="" env="" pass=""
+  local kind=$1 name=$2 job="" tags="" timeout="" env="" pass="" deviates=""
   shift 2
   case "$kind" in box | host) ;; *) echo "ci_step: kind must be box or host, got '$kind'" >&2; exit 2 ;; esac
   while [[ $# -gt 0 && "$1" == --* ]]; do
@@ -123,6 +127,7 @@ ci_step() {
       --set) env+="$2"$'\n'; shift 2 ;;
       --pass) pass+="$2"$'\n'; shift 2 ;;
       --timeout) timeout=$2; shift 2 ;;
+      --deviates) [[ -n "${2:-}" ]] || { echo "ci_step '$name': --deviates needs a reason" >&2; exit 2; }; deviates=$2; shift 2 ;;
       --tag) tags+=",$2"; shift 2 ;;
       --) shift; break ;;
       *) echo "ci_step '$name': unknown option $1" >&2; exit 2 ;;
@@ -152,6 +157,7 @@ ci_step() {
   PLAN_JOBS+=("$job")
   PLAN_TAGS+=("${tags#,}")
   PLAN_TIMEOUTS+=("$timeout")
+  PLAN_DEVIATES+=("$deviates")
   PLAN_ENVS+=("$env")
   PLAN_PASS+=("$pass")
   PLAN_ARGS+=("$raw_args")
@@ -339,7 +345,9 @@ print_plan() {
     json_lines "${PLAN_JOBS[$i]//,/$NL}"
     printf ',"tags":'
     json_lines "${PLAN_TAGS[$i]//,/$NL}"
-    printf ',"timeout":%s,"env":' "${PLAN_TIMEOUTS[$i]:-null}"
+    printf ',"timeout":%s,"deviates":' "${PLAN_TIMEOUTS[$i]:-null}"
+    if [[ -n "${PLAN_DEVIATES[$i]}" ]]; then json_string "${PLAN_DEVIATES[$i]}"; else printf 'null'; fi
+    printf ',"env":'
     json_lines "${PLAN_ENVS[$i]}"
     printf ',"pass":'
     json_lines "${PLAN_PASS[$i]}"
