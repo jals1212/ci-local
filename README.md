@@ -6,16 +6,18 @@ a parity test.
 
 ```text
 $ npx ci-local
-ci-local 0.1.0: 17 steps, node 24.21.0, project erp-ci, jobs: quality image pg mssql
+ci-local 0.1.0: 6 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 ...
-ci-local summary: node 24.21.0, project erp-ci, jobs: quality image pg mssql
-  ok       npm ci                                                     8s
+ci-local summary: node 24.21.0, project myapp-ci, jobs: quality tests
+  ok       Build the runner image                                     0s
+  ok       Start the Linux runner                                     1s
+  ok       npm ci                                                     9s
   ok       npm run lint                                               7s
-  ...
-  ok       node ace test (mssql)                                      2m23s
-  total 6m29s
+  ok       Start the database                                         11s
+  ok       npm test                                                   1m12s
+  total 1m40s
 PASSED: every step ran and passed. This is not the GitHub check.
-Development stack untouched: 5 container(s), same ids and start times as before.
+Development stack untouched: 3 container(s), same ids and start times as before.
 ```
 
 ## Why, and how it differs from `act`
