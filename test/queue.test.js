@@ -566,16 +566,20 @@ test('a run claims the events file under <file>.claim: it waits for a held claim
   mkdirSync(`${file}.claim`) // held, fresh: another run between its check and its first event
 
   const run = start([], { cwd: dir, queue, env: { XDG_CACHE_HOME: cache } })
-  await new Promise((resolve) => setTimeout(resolve, 600))
+  // The queue lock is taken just before the first queued event, which is
+  // when the run claims the file: from here it can only be waiting.
+  await until(() => existsSync(join(queue, 'lock', 'pid')))
   assert.equal(readFileSync(file, 'utf8'), '{"left":"by whoever holds the claim"}\n', 'untouched while claimed')
   assert.equal(existsSync(join(dir, 'ran')), false)
 
+  const released = Date.now()
   rmSync(`${file}.claim`, { recursive: true })
   const { status, err } = await run.done
   assert.equal(status, 0, err)
   const events = defaultEvents(cache, 'claim-ci')
   assert.equal(events[0].event, 'queued')
   assert.equal(events[0].pid, run.child.pid)
+  assert.ok(Date.parse(events[0].ts) >= released - 5, 'its first event came after the claim was given back')
   assert.equal(existsSync(`${file}.claim`), false, 'the claim is given back')
 })
 
@@ -591,4 +595,37 @@ test('a claim left by a dead run (older than 10 seconds) is broken', async () =>
   assert.equal(status, 0, err)
   assert.ok(Date.now() - started < 5000, 'promptly')
   assert.equal(defaultEvents(cache, 'claim-ci').at(-1).result, 'passed')
+})
+
+test('an events file whose directory takes no .claim: the run says so at once and goes on without events', async () => {
+  const dir = project('claim-ci', [WORK])
+  const locked = scratch('locked-')
+  const file = join(locked, 'events.ndjson')
+  writeFileSync(file, '')
+  chmodSync(locked, 0o555) // the file stays writable; nothing can be made beside it
+  try {
+    const started = Date.now()
+    const { status, err } = await start(['--events', file], { cwd: dir, queue: scratch('queue-') }).done
+    assert.equal(status, 0, err)
+    assert.ok(Date.now() - started < 4000, `took ${Date.now() - started}ms: no 10-second wait for a claim that cannot be made`)
+    assert.match(err, /ci-local: cannot claim the events file .*events\.ndjson: this run writes no events\n/)
+    assert.equal(existsSync(join(dir, 'ran')), true)
+  } finally {
+    chmodSync(locked, 0o755)
+  }
+})
+
+test('in the TMPDIR fallback, a ci-local directory inside that others can write is refused too', async () => {
+  const tmp = scratch('tmpdir-')
+  const base = join(tmp, `ci-local-${process.getuid()}`)
+  mkdirSync(join(base, 'ci-local'), { recursive: true })
+  chmodSync(base, 0o700)
+  chmodSync(join(base, 'ci-local'), 0o777)
+  const dir = project('proj-a', [WORK])
+  const env = { HOME: undefined, XDG_CACHE_HOME: undefined, CI_LOCAL_QUEUE_DIR: undefined, TMPDIR: tmp }
+  const { status, out, err } = await start([], { cwd: dir, queue: undefined, env }).done
+  assert.equal(status, 0, err)
+  assert.doesNotMatch(out, /\nEvents: /)
+  assert.deepEqual(readdirSync(join(base, 'ci-local')), [], 'nothing written there')
+  assert.equal(existsSync(join(dir, 'ran')), true)
 })

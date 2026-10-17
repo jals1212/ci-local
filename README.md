@@ -264,6 +264,13 @@ interrupted while queued, or refused with `--no-wait`). Exit status: 0 passed,
 (interrupted, or gone without an end), so a script can wait with
 `while ci-local --status >/dev/null; [ $? -eq 3 ]; do sleep 10; done`.
 
+"Its process lives" means a process with the run's pid exists. If the system
+gives a killed run's pid to another process before you look, `--status`
+shows the run as still going until that process ends too; the queue treats
+a ticket the same way. Pids are reused rarely enough for this to be a
+curiosity on a workstation, and the next run of the project replaces the
+file.
+
 ### One run at a time: the queue
 
 Several runs at once (an agent in each of three repositories, say) freeze
@@ -341,6 +348,12 @@ runs ci-local or Docker itself:
 - **Skill `ci-local`**: how an agent runs and waits for ci-local (in the
   background, `--quiet`, never two runs, read only the failing step's log).
   Branch and merge policy stay the project's.
+
+The extension follows the file ci-local would write: `CI_LOCAL_EVENTS` from
+Pi's environment (a relative path is taken from the repository root, where
+runs are started as a rule), else the cache. When the cache is the `TMPDIR`
+fallback and it is not a private directory of yours, runs write no events,
+and the extension follows nothing.
 
 Outside Pi nothing changes: the extension, the skill and the optional Pi peer
 dependencies are not used by `npx ci-local`.

@@ -614,7 +614,9 @@ private_dir() {
 }
 # The TMPDIR fallback is a fixed name in a shared directory: one that is
 # there already and is not ours alone (planted, or a symlink to elsewhere) is
-# never used, for events or for the queue.
+# never used, for events or for the queue. One planted after this check is
+# caught by make_cache_dir, which in the fallback checks both directories
+# again once they exist, before anything is written in them.
 if [[ $CACHE_BASE_PRIVATE -eq 1 ]] && { [[ -L "$CACHE_BASE" ]] || { [[ -e "$CACHE_BASE" ]] && ! private_dir "$CACHE_BASE"; }; }; then
   echo "ci-local: $CACHE_BASE is not a private directory of this user: no events file, no queue" >&2
   [[ $STATUS -eq 0 ]] || exit 2
@@ -625,11 +627,14 @@ fi
 # Makes ci-local's directory in the cache, readable by its user alone (the
 # directories above it, when they are the TMPDIR fallback's, too).
 make_cache_dir() {
-  [[ -d "$CI_CACHE_DIR" ]] && return 0
-  if [[ $CACHE_BASE_PRIVATE -eq 1 && ! -d "$CACHE_BASE" ]]; then
-    mkdir -p "$CACHE_BASE" && chmod 700 "$CACHE_BASE" || return 1
+  if [[ ! -d "$CI_CACHE_DIR" ]]; then
+    if [[ $CACHE_BASE_PRIVATE -eq 1 && ! -d "$CACHE_BASE" ]]; then
+      mkdir -p "$CACHE_BASE" && chmod 700 "$CACHE_BASE" || return 1
+    fi
+    mkdir -p "$CI_CACHE_DIR" && chmod 700 "$CI_CACHE_DIR" || return 1
   fi
-  mkdir -p "$CI_CACHE_DIR" && chmod 700 "$CI_CACHE_DIR"
+  # In the shared TMPDIR: whatever exists now must be ours alone.
+  [[ $CACHE_BASE_PRIVATE -eq 0 ]] || { private_dir "$CACHE_BASE" && private_dir "$CI_CACHE_DIR"; }
 }
 [[ $STATUS -eq 0 ]] || show_status "$DEFAULT_EVENTS"
 [[ ${#CI_JOBS[@]} -gt 0 ]] || { echo "ci-local: CI_JOBS is empty" >&2; exit 2; }
@@ -1134,6 +1139,12 @@ claim_events() {
   local claim="$1.claim" mtime tries=0
   OWNER=""
   until mkdir "$claim" 2>/dev/null; do
+    if [[ ! -e "$claim" ]]; then
+      # Released between the two looks, or it cannot be made at all (a
+      # directory this user cannot write): one more try, then give up now.
+      mkdir "$claim" 2>/dev/null && break
+      [[ -e "$claim" ]] || return 1
+    fi
     mtime="$(file_mtime "$claim")"
     if [[ "$mtime" =~ ^[0-9]+$ && $(($(date +%s) - mtime)) -gt 10 ]]; then
       mv "$claim" "$claim.stale.$$" 2>/dev/null && rm -rf "$claim.stale.$$"

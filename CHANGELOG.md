@@ -46,7 +46,13 @@ their `release x.y.z:` commit messages.
 - The `TMPDIR` fallback cache (`$TMPDIR/ci-local-<uid>`, used without
   `XDG_CACHE_HOME` and `HOME`) is refused when it already exists and is not a
   real directory of the user that no one else can write: the run neither
-  queues nor writes events, and `--status` exits 2.
+  queues nor writes events, and `--status` exits 2. Its `ci-local`
+  directory is checked the same way once it exists, so one planted after
+  the first check is caught before anything is written in it.
+- A `<file>.claim` that cannot be made at all (an `--events` file in a
+  directory the user cannot write) is given up at once, without waiting.
+- The Pi extension takes a relative `CI_LOCAL_EVENTS` from the repository
+  root, and follows nothing when the `TMPDIR` fallback cache is refused.
 - README: where to install (the CLI in each repository, the Pi package once),
   keeping a machine's repositories on 0.4.x together, an environment variable
   reference, the exit statuses of a run and of `--status`, and the files

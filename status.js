@@ -63,9 +63,26 @@ export function duration(ms) {
 
 const quote = (arg) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`)
 
+/** What an `end` event's result shows as. */
+const FINISHED_AS = { passed: 'passed', interrupted: 'stopped' }
+
 /**
- * The state of a run from its events: one of running, passed, failed,
- * stopped, with what the block shows. `isAlive` is injectable for tests.
+ * queued, starting, running, passed, failed or stopped. A run with no end
+ * event is stopped once its process is gone; until its turn (no `run`
+ * event) it is queued while something is ahead of it, else starting.
+ */
+function stateOf({ end, run, lastQueued, isAlive }) {
+  if (end) return FINISHED_AS[end.result] ?? 'failed'
+  if (!isAlive(run.pid)) return 'stopped'
+  if (run.event === 'run') return 'running'
+  const waiting = (lastQueued?.ahead ?? 0) > 0 || Boolean(lastQueued?.blockedBy)
+  return waiting ? 'queued' : 'starting'
+}
+
+/**
+ * The state of a run from its events: one of queued, starting, running,
+ * passed, failed, stopped, with what the block shows. `isAlive` is
+ * injectable for tests.
  */
 export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
   const queuedEvents = events.filter((event) => event.event === 'queued')
@@ -81,13 +98,8 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
     if (event.event === 'ok') step = null
   }
   const fail = events.findLast((event) => event.event === 'fail') ?? null
-  let state
-  if (end) state = end.result === 'passed' ? 'passed' : end.result === 'interrupted' ? 'stopped' : 'failed'
-  else if (!isAlive(run.pid)) state = 'stopped'
-  else if (run.event === 'run') state = 'running'
-  else state = lastQueued.ahead > 0 || lastQueued.blockedBy ? 'queued' : 'starting'
   return {
-    state,
+    state: stateOf({ end, run, lastQueued, isAlive }),
     project: run.project,
     total: run.total,
     commit: run.commit,

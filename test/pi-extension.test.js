@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -130,4 +130,28 @@ test('the tracker tells runs apart: a new run in flight, then over, notifies aga
   const third = run({ ts: ago(5_000) })
   tracker.observe(readRun(eventsFile([third])))
   assert.equal(tracker.observe(over(third)), true)
+})
+
+test('eventsFileFor: a relative CI_LOCAL_EVENTS is the repository root’s, as runs are started there', () => {
+  assert.equal(eventsFileFor('p-ci', { HOME: '/h', CI_LOCAL_EVENTS: 'run.ndjson' }, '/repo'), '/repo/run.ndjson')
+  assert.equal(eventsFileFor('p-ci', { HOME: '/h', CI_LOCAL_EVENTS: 'out/run.ndjson' }, '/repo'), '/repo/out/run.ndjson')
+})
+
+test('eventsFileFor: the TMPDIR fallback is null when it is there and not a private directory of this user', () => {
+  const fallback = (tmp) => join(tmp, `ci-local-${process.getuid()}`)
+  const symTmp = mkdtempSync(join(tmpdir(), 'tmpdir-'))
+  symlinkSync(mkdtempSync(join(tmpdir(), 'planted-')), fallback(symTmp))
+  assert.equal(eventsFileFor('p-ci', { TMPDIR: symTmp }), null)
+  const openTmp = mkdtempSync(join(tmpdir(), 'tmpdir-'))
+  mkdirSync(fallback(openTmp))
+  chmodSync(fallback(openTmp), 0o777)
+  assert.equal(eventsFileFor('p-ci', { TMPDIR: openTmp }), null)
+  const innerTmp = mkdtempSync(join(tmpdir(), 'tmpdir-'))
+  mkdirSync(join(fallback(innerTmp), 'ci-local'), { recursive: true })
+  chmodSync(fallback(innerTmp), 0o700)
+  chmodSync(join(fallback(innerTmp), 'ci-local'), 0o777)
+  assert.equal(eventsFileFor('p-ci', { TMPDIR: innerTmp }), null, 'its ci-local directory must be private too')
+  const okTmp = mkdtempSync(join(tmpdir(), 'tmpdir-'))
+  mkdirSync(fallback(okTmp), { mode: 0o700 })
+  assert.equal(eventsFileFor('p-ci', { TMPDIR: okTmp }), join(fallback(okTmp), 'ci-local', 'p-ci.ndjson'))
 })
