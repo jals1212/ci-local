@@ -1023,12 +1023,14 @@ queue_wait() {
     key="$AHEAD|$BLOCK_PROJECT|$BLOCK_PID"
     if [[ "$key" != "$last" ]]; then
       last=$key
+      # Refused before anything is recorded: the events file keeps the
+      # project's last run for --status.
+      if [[ $got -eq 0 && $NO_WAIT -eq 1 ]]; then
+        echo "ci-local: the machine is busy: $BLOCK_PROJECT (pid ${BLOCK_PID:-?})" >&2
+        exit 3
+      fi
       emit_position
       if [[ $got -eq 0 ]]; then
-        if [[ $NO_WAIT -eq 1 ]]; then
-          echo "ci-local: the machine is busy: $BLOCK_PROJECT (pid ${BLOCK_PID:-?})" >&2
-          exit 3
-        fi
         echo "Waiting for $BLOCK_PROJECT (pid ${BLOCK_PID:-?}) · $AHEAD ahead"
         waited=1
       fi

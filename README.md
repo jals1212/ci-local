@@ -261,7 +261,7 @@ and after it ends. It needs no Docker and changes nothing.
 A run with no `end` event is `queued` while it waits for its turn, `starting`
 once it has it and has not yet begun its steps, `running` after that, as long
 as its process lives, and `stopped` once it is gone (also when it was
-interrupted while queued, or refused with `--no-wait`). Exit status: 0 passed,
+interrupted while queued). Exit status: 0 passed,
 1 failed, 2 no run recorded, 3 queued, starting or running, 4 stopped
 (interrupted, or gone without an end), so a script can wait with
 `while ci-local --status >/dev/null; [ $? -eq 3 ]; do sleep 10; done`.
@@ -295,7 +295,8 @@ The `total` of the summary counts from the turn, not from the wait.
 
 - **`--no-wait`**: when the machine is busy, print
   `ci-local: the machine is busy: <project> (pid <pid>)` on stderr and exit
-  with status **3**, without waiting.
+  with status **3**, without waiting. The refused run records nothing: the
+  project's events file, and so `--status`, still show its last run.
 - **Ctrl-C or `kill` while waiting** removes the run from the queue and exits
   130 or 143, with no summary and no cleanup: the runner of that project may
   be the one in use by the run ahead.
@@ -353,9 +354,9 @@ runs ci-local or Docker itself:
 
 The extension follows the file ci-local would write: `CI_LOCAL_EVENTS` from
 Pi's environment (a relative path is taken from the repository root, where
-runs are started as a rule), else the cache. When the cache is the `TMPDIR`
-fallback and it is not a private directory of yours, runs write no events,
-and the extension follows nothing.
+runs are started as a rule), else the cache. When runs write no events
+(`CI_LOCAL_EVENTS=off`, or a `TMPDIR` fallback cache that is not a private
+directory of yours), the extension follows nothing.
 
 Outside Pi nothing changes: the extension, the skill and the optional Pi peer
 dependencies are not used by `npx ci-local`.

@@ -176,7 +176,7 @@ export function render(state, eventsFile) {
   if (state.end) {
     why = `Interrupted${state.step ? ` during: ${stepRef(state.step)})` : ''} · ${time}${log(state.step)}`
   } else if (!state.hasRun) {
-    why = `Never started: process ${state.pid} is gone while queued (interrupted, or the machine was busy with --no-wait) · ${duration(state.waitingMs)}`
+    why = `Never started: process ${state.pid} is gone while queued (interrupted) · ${duration(state.waitingMs)}`
   } else {
     why = `No end: process ${state.pid} is gone (killed, or Docker froze)${
       state.step ? ` · during: ${stepRef(state.step)})` : ''
@@ -202,6 +202,13 @@ function main(file) {
   return code
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
-  process.exitCode = main(process.argv[2])
+/** True when this file is the script node runs (`node status.js FILE`), not an import. */
+function isMain() {
+  try {
+    return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+  } catch {
+    return false // argv[1] is no file (`node -e`, an embedder): this file was imported
+  }
 }
+
+if (isMain()) process.exitCode = main(process.argv[2])

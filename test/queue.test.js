@@ -130,51 +130,61 @@ test('two runs: the second waits for the first’s end, says whom it waits for, 
   const evA = eventsOf()
   const evB = eventsOf()
   const runA = start(['--events', evA], { cwd: dirA, queue })
-  await until(() => existsSync(join(dirA, 'started')))
-  const pidA = kinds(evA, 'run')[0].pid
-  // The first run's ticket and lock say who holds the machine.
-  const [ticket] = tickets(queue)
-  assert.equal(tickets(queue).length, 1)
-  assert.equal(ticket.slice(-10), pad(pidA, 10))
-  assert.equal(readFileSync(join(queue, ticket), 'utf8'), `project=proj-a\npid=${pidA}\nrepo=${realpathSync(dirA)}\n`)
-  assert.equal(readFileSync(join(queue, 'lock', 'pid'), 'utf8').trim(), String(pidA))
+  let runB
+  try {
+    await until(() => existsSync(join(dirA, 'started')))
+    const pidA = kinds(evA, 'run')[0].pid
+    // The first run's ticket and lock say who holds the machine.
+    const [ticket] = tickets(queue)
+    assert.equal(tickets(queue).length, 1)
+    assert.equal(ticket.slice(-10), pad(pidA, 10))
+    assert.equal(readFileSync(join(queue, ticket), 'utf8'), `project=proj-a\npid=${pidA}\nrepo=${realpathSync(dirA)}\n`)
+    assert.equal(readFileSync(join(queue, 'lock', 'pid'), 'utf8').trim(), String(pidA))
 
-  const runB = start(['--events', evB], { cwd: dirB, queue })
-  await until(() => runB.out.includes('Waiting for '))
-  // Polled a few times meanwhile: the line is not repeated, nothing ran.
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  assert.deepEqual(waitingLines(runB.out), [`Waiting for proj-a (pid ${pidA}) · 1 ahead`])
-  assert.equal(existsSync(join(dirB, 'ran')), false)
-  assert.deepEqual(kinds(evB, 'run'), [])
-  assert.equal(tickets(queue).length, 2)
+    runB = start(['--events', evB], { cwd: dirB, queue })
+    await until(() => runB.out.includes('Waiting for '))
+    // Polled a few times meanwhile: the line is not repeated, nothing ran.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    assert.deepEqual(waitingLines(runB.out), [`Waiting for proj-a (pid ${pidA}) · 1 ahead`])
+    assert.equal(existsSync(join(dirB, 'ran')), false)
+    assert.deepEqual(kinds(evB, 'run'), [])
+    assert.equal(tickets(queue).length, 2)
 
-  release(dirA)
-  const [a, b] = await Promise.all([runA.done, runB.done])
-  assert.equal(a.status, 0, a.err)
-  assert.equal(b.status, 0, b.err)
-  assert.ok(at(evB, 'start') >= at(evA, 'end'), 'B’s first step starts after A’s end')
-  assert.ok(at(evB, 'run') >= at(evA, 'end'))
-  assert.match(b.out, /\nQueue: your turn after \d+s\n/)
-  assert.doesNotMatch(a.out, /Waiting for |Queue: your turn/)
-  assert.ok(b.out.indexOf('Queue: your turn') < b.out.indexOf('ci-local 0.4.0: 1 steps'), 'before the banner')
-  // queued: what B saw when it queued, and that it then got its turn.
-  assert.deepEqual(
-    kinds(evB, 'queued').map((event) => [event.ahead, event.blockedBy]),
-    [
-      [1, { project: 'proj-a', pid: pidA }],
-      [0, null],
-    ]
-  )
-  const [first] = kinds(evB, 'queued')
-  assert.equal(first.project, 'proj-b')
-  assert.equal(first.pid, kinds(evB, 'run')[0].pid)
-  assert.deepEqual(first.args, ['--events', evB])
-  assert.deepEqual(
-    events(evB).map((event) => event.event),
-    ['queued', 'queued', 'run', 'start', 'ok', 'end']
-  )
-  // Nothing of either run is left in the queue.
-  assert.deepEqual(readdirSync(queue), [])
+    release(dirA)
+    const [a, b] = await Promise.all([runA.done, runB.done])
+    assert.equal(a.status, 0, a.err)
+    assert.equal(b.status, 0, b.err)
+    assert.ok(at(evB, 'start') >= at(evA, 'end'), 'B’s first step starts after A’s end')
+    assert.ok(at(evB, 'run') >= at(evA, 'end'))
+    assert.match(b.out, /\nQueue: your turn after \d+s\n/)
+    assert.doesNotMatch(a.out, /Waiting for |Queue: your turn/)
+    assert.ok(b.out.indexOf('Queue: your turn') < b.out.indexOf('ci-local 0.4.0: 1 steps'), 'before the banner')
+    // queued: what B saw when it queued, and that it then got its turn.
+    assert.deepEqual(
+      kinds(evB, 'queued').map((event) => [event.ahead, event.blockedBy]),
+      [
+        [1, { project: 'proj-a', pid: pidA }],
+        [0, null],
+      ]
+    )
+    const [first] = kinds(evB, 'queued')
+    assert.equal(first.project, 'proj-b')
+    assert.equal(first.pid, kinds(evB, 'run')[0].pid)
+    assert.deepEqual(first.args, ['--events', evB])
+    assert.deepEqual(
+      events(evB).map((event) => event.event),
+      ['queued', 'queued', 'run', 'start', 'ok', 'end']
+    )
+    // Nothing of either run is left in the queue.
+    assert.deepEqual(readdirSync(queue), [])
+  } catch (error) {
+    // Seen failing once in about 40 runs and never reproduced: say everything.
+    const dump = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '(none)')
+    error.message += `\n--- A out:\n${runA.out}\n--- A err:\n${runA.err}\n--- A events:\n${dump(evA)}`
+    error.message += `\n--- B out:\n${runB?.out}\n--- B err:\n${runB?.err}\n--- B events:\n${dump(evB)}`
+    error.message += `\n--- queue: ${existsSync(queue) ? readdirSync(queue).join(' ') : '(none)'}`
+    throw error
+  }
 })
 
 test('a third run keeps its place: A, then B, then C; it re-announces whom it waits for', async () => {
@@ -270,6 +280,9 @@ test('--no-wait behind a running run: status 3 naming it; the run itself is not 
   const dirB = project('proj-b', [WORK])
   const evA = eventsOf()
   const evB = eventsOf()
+  // B's last run, which a refused --no-wait must leave for --status.
+  const previous = '{"ts":"2026-01-01T00:00:00.000Z","event":"run","project":"proj-b","pid":1}\n{"ts":"2026-01-01T00:00:01.000Z","event":"end","result":"passed","durationMs":1000}\n'
+  writeFileSync(evB, previous)
   const runA = start(['--events', evA], { cwd: dirA, queue })
   await until(() => existsSync(join(dirA, 'started')))
   const pidA = kinds(evA, 'run')[0].pid
@@ -280,10 +293,7 @@ test('--no-wait behind a running run: status 3 naming it; the run itself is not 
   assert.doesNotMatch(b.out, /Waiting for/)
   assert.equal(existsSync(join(dirB, 'ran')), false)
   assert.deepEqual(tickets(queue), before, 'B’s ticket is gone')
-  assert.deepEqual(
-    events(evB).map((event) => event.event),
-    ['queued']
-  )
+  assert.equal(readFileSync(evB, 'utf8'), previous, 'a refused run leaves the events file alone')
   release(dirA)
   assert.equal((await runA.done).status, 0)
 })

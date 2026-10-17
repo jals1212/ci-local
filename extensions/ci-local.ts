@@ -52,7 +52,7 @@ export default function ciLocal(pi: ExtensionAPI) {
       if (!found) throw new Error(`no ci-local.config.sh with a literal CI_PROJECT at or above ${ctx.cwd}`)
       const file = eventsFileFor(found.project, process.env, found.repo)
       if (!file) {
-        const text = `No events file to follow for ${found.project}: the TMPDIR fallback cache is not a private directory of this user.`
+        const text = `No events file to follow for ${found.project}: CI_LOCAL_EVENTS is off, or the TMPDIR fallback cache is not a private directory of this user.`
         return { content: [{ type: 'text', text }], details: undefined }
       }
       const run = readRun(file)
@@ -72,7 +72,7 @@ export default function ciLocal(pi: ExtensionAPI) {
     const found = findProject(ctx.cwd)
     if (!found) return
     const file = eventsFileFor(found.project, process.env, found.repo)
-    if (!file) return // no private cache: runs write no events here
+    if (!file) return // CI_LOCAL_EVENTS=off, or no private cache: runs write no events
     const tracker = createTracker()
     let shown: string | undefined
 

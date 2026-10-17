@@ -54,7 +54,12 @@ their `release x.y.z:` commit messages.
   before 0.4.0. A stale claim that cannot be removed is given up at once
   (the run writes no events and says so) instead of being retried forever.
 - The Pi extension takes a relative `CI_LOCAL_EVENTS` from the repository
-  root, and follows nothing when the `TMPDIR` fallback cache is refused.
+  root, and follows nothing when runs write no events (`CI_LOCAL_EVENTS=off`,
+  or a refused `TMPDIR` fallback cache) instead of showing an old run (#4).
+- `status.js` can be imported by a process whose `argv[1]` is no file
+  (`node -e`, an embedder) without throwing (#5).
+- A run refused by `--no-wait` records nothing, so `--status` keeps showing
+  the project's last run (#6).
 - README: where to install (the CLI in each repository, the Pi package once),
   keeping a machine's repositories on 0.4.x together, an environment variable
   reference, the exit statuses of a run and of `--status`, and the files

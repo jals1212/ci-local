@@ -62,7 +62,9 @@ test('eventsFileFor follows the engine: CI_LOCAL_EVENTS, then the cache', () => 
   assert.equal(eventsFileFor('p-ci', { XDG_CACHE_HOME: '/x', HOME: '/h' }), '/x/ci-local/p-ci.ndjson')
   assert.equal(eventsFileFor('p-ci', { HOME: '/h' }), '/h/.cache/ci-local/p-ci.ndjson')
   assert.equal(eventsFileFor('p-ci', { HOME: '/h', CI_LOCAL_EVENTS: '/e.ndjson' }), '/e.ndjson')
-  assert.equal(eventsFileFor('p-ci', { HOME: '/h', CI_LOCAL_EVENTS: 'off' }), '/h/.cache/ci-local/p-ci.ndjson')
+  for (const off of ['off', '0', 'false', 'no']) {
+    assert.equal(eventsFileFor('p-ci', { HOME: '/h', CI_LOCAL_EVENTS: off }), null, `CI_LOCAL_EVENTS=${off}: runs write none`)
+  }
   assert.match(eventsFileFor('p-ci', { TMPDIR: '/t/' }), /^\/t\/ci-local-\d+\/ci-local\/p-ci\.ndjson$/)
 })
 

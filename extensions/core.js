@@ -45,7 +45,8 @@ function privateDir(path) {
 
 /**
  * The events file a run of `project` writes, as bin/ci-local decides it, or
- * null when there is none to follow. A relative CI_LOCAL_EVENTS is taken from
+ * null when there is none to follow (CI_LOCAL_EVENTS=off, or a refused
+ * TMPDIR fallback). A relative CI_LOCAL_EVENTS is taken from
  * `repo` (bin/ci-local takes it from where it runs: the repository root, as
  * a rule). The TMPDIR fallback, a fixed name in a shared directory, is null
  * when it is there and is not a private directory of this user, as
@@ -53,7 +54,8 @@ function privateDir(path) {
  */
 export function eventsFileFor(project, env = process.env, repo = process.cwd()) {
   const named = env.CI_LOCAL_EVENTS
-  if (named && !['0', 'off', 'false', 'no'].includes(named)) return isAbsolute(named) ? named : join(repo, named)
+  if (['0', 'off', 'false', 'no'].includes(named)) return null // runs write no events file
+  if (named) return isAbsolute(named) ? named : join(repo, named)
   if (env.XDG_CACHE_HOME) return join(env.XDG_CACHE_HOME, 'ci-local', `${project}.ndjson`)
   if (env.HOME) return join(env.HOME, '.cache', 'ci-local', `${project}.ndjson`)
   const fallback = `${(env.TMPDIR || '/tmp').replace(/\/+$/, '')}/ci-local-${process.getuid?.() ?? 0}`
