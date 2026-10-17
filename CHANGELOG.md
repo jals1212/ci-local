@@ -37,6 +37,9 @@ their `release x.y.z:` commit messages.
   waits for changes (`project`, `version`, `pid`, `commit`, `args`, `logDir`,
   `ahead`, `blockedBy`), so `--status` never has a gap before the `run` event.
   `--status` shows `queued` (⏳) and `starting` (🐳), both with exit status 3.
+- An events file still written by a live run of the same project is left to
+  it: a second run takes it over only at its turn (without the queue, it
+  writes no events and says so).
 - A Pi package (`pi install npm:@jals1212/ci-local`): an extension that shows
   the run of the session's repository in the footer (queued, running with its
   step, then the result), notifies when a run it saw in flight ends and puts

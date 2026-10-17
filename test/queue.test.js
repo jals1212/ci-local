@@ -465,3 +465,64 @@ test('a queue directory that cannot be made is a warning: the run goes on withou
   assert.match(err, /ci-local: cannot use the queue directory .*: running without waiting\n/)
   assert.equal(existsSync(join(dir, 'ran')), true)
 })
+
+/** The events in a project's default events file under `cache`. */
+const defaultEvents = (cache, name) =>
+  readFileSync(join(cache, 'ci-local', `${name}.ndjson`), 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+
+/** The pids of the runs that wrote these events (only queued and run carry one). */
+const writers = (events) => [...new Set(events.filter((event) => 'pid' in event).map((event) => event.pid))]
+
+const statusIn = (cache, cwd) =>
+  spawnSync('bash', [BIN, '--status'], { cwd, encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } })
+
+test('a second run of the same project does not take over the events file of the one in flight', async () => {
+  const queue = scratch('queue-')
+  const cache = scratch('cache-')
+  const dirA = project('same-ci', [GATE])
+  const dirB = project('same-ci', [WORK])
+  const a = start([], { cwd: dirA, queue, env: { XDG_CACHE_HOME: cache } })
+  await until(() => existsSync(join(dirA, 'started')))
+  const b = start([], { cwd: dirB, queue, env: { XDG_CACHE_HOME: cache } })
+  await until(() => b.out.includes('Waiting for same-ci'))
+
+  // While B waits, the file is still A's alone, and --status shows A running.
+  const during = defaultEvents(cache, 'same-ci')
+  assert.deepEqual(writers(during), [a.child.pid])
+  assert.ok(during.some((event) => event.event === 'run'))
+  const shown = statusIn(cache, dirA)
+  assert.equal(shown.status, 3, shown.stdout + shown.stderr)
+  assert.match(shown.stdout, /running · \[1\/1\] Gate/)
+
+  writeFileSync(join(dirA, 'release'), '')
+  assert.equal((await a.done).status, 0)
+  assert.equal((await b.done).status, 0)
+  // Once B had its turn, the file is B's alone, from its first event to its end.
+  const after = defaultEvents(cache, 'same-ci')
+  assert.deepEqual(writers(after), [b.child.pid])
+  assert.equal(after[0].event, 'queued')
+  assert.equal(after.at(-1).event, 'end')
+  assert.equal(after.at(-1).result, 'passed')
+})
+
+test('CI_LOCAL_QUEUE=off: a second run of the same project leaves the live events file alone, and says so', async () => {
+  const queue = scratch('queue-')
+  const cache = scratch('cache-')
+  const dirA = project('same-ci', [GATE])
+  const dirB = project('same-ci', [WORK])
+  const env = { XDG_CACHE_HOME: cache, CI_LOCAL_QUEUE: 'off' }
+  const a = start([], { cwd: dirA, queue, env })
+  await until(() => existsSync(join(dirA, 'started')))
+  const b = start([], { cwd: dirB, queue, env })
+  const doneB = await b.done
+  assert.equal(doneB.status, 0, doneB.err)
+  assert.match(doneB.err, new RegExp(`ci-local: the events file .* belongs to run ${a.child.pid}, still going: this run writes no events\\n`))
+  writeFileSync(join(dirA, 'release'), '')
+  assert.equal((await a.done).status, 0)
+  const events = defaultEvents(cache, 'same-ci')
+  assert.deepEqual(writers(events), [a.child.pid])
+  assert.equal(events.at(-1).result, 'passed')
+})
