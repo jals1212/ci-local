@@ -39,7 +39,18 @@ their `release x.y.z:` commit messages.
   `--status` shows `queued` (⏳) and `starting` (🐳), both with exit status 3.
 - An events file still written by a live run of the same project is left to
   it: a second run takes it over only at its turn (without the queue, it
-  writes no events and says so).
+  writes no events and says so). Taking it (checking that no live run owns
+  it, emptying it, writing the first event) happens in one step under a
+  `<file>.claim` directory, so two runs that start together cannot both take
+  it; a claim older than 10 seconds is a crashed run's and is broken.
+- The `TMPDIR` fallback cache (`$TMPDIR/ci-local-<uid>`, used without
+  `XDG_CACHE_HOME` and `HOME`) is refused when it already exists and is not a
+  real directory of the user that no one else can write: the run neither
+  queues nor writes events, and `--status` exits 2.
+- README: where to install (the CLI in each repository, the Pi package once),
+  keeping a machine's repositories on 0.4.x together, an environment variable
+  reference, the exit statuses of a run and of `--status`, and the files
+  ci-local leaves in the cache.
 - A Pi package (`pi install npm:@jals1212/ci-local`): an extension that shows
   the run of the session's repository in the footer (queued, running with its
   step, then the result), notifies when a run it saw in flight ends and puts

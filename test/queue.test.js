@@ -12,8 +12,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   realpathSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -525,4 +527,68 @@ test('CI_LOCAL_QUEUE=off: a second run of the same project leaves the live event
   const events = defaultEvents(cache, 'same-ci')
   assert.deepEqual(writers(events), [a.child.pid])
   assert.equal(events.at(-1).result, 'passed')
+})
+
+test('the TMPDIR fallback is refused when it is not a private directory of this user: no events, no queue', async () => {
+  const fallback = (tmp) => join(tmp, `ci-local-${process.getuid()}`)
+  const env = (tmp) => ({ HOME: undefined, XDG_CACHE_HOME: undefined, CI_LOCAL_QUEUE_DIR: undefined, TMPDIR: tmp })
+
+  // Someone else's directory, planted as a symlink at the fallback path.
+  const symTmp = scratch('tmpdir-')
+  const planted = scratch('planted-')
+  symlinkSync(planted, fallback(symTmp))
+  // A directory any user can write.
+  const openTmp = scratch('tmpdir-')
+  mkdirSync(fallback(openTmp))
+  chmodSync(fallback(openTmp), 0o777)
+
+  for (const [tmp, inside] of [
+    [symTmp, planted],
+    [openTmp, fallback(openTmp)],
+  ]) {
+    const dir = project('proj-a', [WORK])
+    const { status, out, err } = await start([], { cwd: dir, queue: undefined, env: env(tmp) }).done
+    assert.equal(status, 0, err)
+    assert.match(err, /ci-local: .*ci-local-\d+ is not a private directory of this user: no events file, no queue\n/)
+    assert.doesNotMatch(out, /\nEvents: /)
+    assert.deepEqual(readdirSync(inside), [], 'nothing written there')
+    assert.equal(existsSync(join(dir, 'ran')), true, 'the run itself goes on')
+  }
+})
+
+test('a run claims the events file under <file>.claim: it waits for a held claim, then takes the file', async () => {
+  const queue = scratch('queue-')
+  const cache = scratch('cache-')
+  const dir = project('claim-ci', [WORK])
+  const file = join(cache, 'ci-local', 'claim-ci.ndjson')
+  mkdirSync(join(cache, 'ci-local'), { recursive: true })
+  writeFileSync(file, '{"left":"by whoever holds the claim"}\n')
+  mkdirSync(`${file}.claim`) // held, fresh: another run between its check and its first event
+
+  const run = start([], { cwd: dir, queue, env: { XDG_CACHE_HOME: cache } })
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  assert.equal(readFileSync(file, 'utf8'), '{"left":"by whoever holds the claim"}\n', 'untouched while claimed')
+  assert.equal(existsSync(join(dir, 'ran')), false)
+
+  rmSync(`${file}.claim`, { recursive: true })
+  const { status, err } = await run.done
+  assert.equal(status, 0, err)
+  const events = defaultEvents(cache, 'claim-ci')
+  assert.equal(events[0].event, 'queued')
+  assert.equal(events[0].pid, run.child.pid)
+  assert.equal(existsSync(`${file}.claim`), false, 'the claim is given back')
+})
+
+test('a claim left by a dead run (older than 10 seconds) is broken', async () => {
+  const cache = scratch('cache-')
+  const dir = project('claim-ci', [WORK])
+  const file = join(cache, 'ci-local', 'claim-ci.ndjson')
+  mkdirSync(`${file}.claim`, { recursive: true })
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.claim`, old, old)
+  const started = Date.now()
+  const { status, err } = await start([], { cwd: dir, queue: scratch('queue-'), env: { XDG_CACHE_HOME: cache } }).done
+  assert.equal(status, 0, err)
+  assert.ok(Date.now() - started < 5000, 'promptly')
+  assert.equal(defaultEvents(cache, 'claim-ci').at(-1).result, 'passed')
 })

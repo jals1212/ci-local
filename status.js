@@ -25,10 +25,24 @@ export function lastRun(text) {
       // A line being written, or not ours: skip it.
     }
   }
-  let start = events.findLastIndex((event) => event.event === 'queued')
-  if (start === -1) start = events.findLastIndex((event) => event.event === 'run')
-  else while (start > 0 && events[start - 1].event === 'queued' && events[start - 1].pid === events[start].pid) start--
-  return start === -1 ? null : events.slice(start)
+  const lastQueued = events.findLastIndex((event) => event.event === 'queued')
+  if (lastQueued === -1) {
+    const lastRunEvent = events.findLastIndex((event) => event.event === 'run')
+    return lastRunEvent === -1 ? null : events.slice(lastRunEvent)
+  }
+  return events.slice(firstOfQueuedSeries(events, lastQueued))
+}
+
+/**
+ * The index of the first `queued` event of the unbroken series that ends at
+ * `index`: a waiting run repeats the event, with its own pid, each time its
+ * place changes.
+ */
+function firstOfQueuedSeries(events, index) {
+  const { pid } = events[index]
+  let first = index
+  while (first > 0 && events[first - 1].event === 'queued' && events[first - 1].pid === pid) first--
+  return first
 }
 
 /** True when a process with this pid exists (ours or not). */

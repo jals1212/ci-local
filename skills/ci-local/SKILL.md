@@ -13,6 +13,7 @@ Use when running, waiting on, reading, or configuring `ci-local` (`npx ci-local`
 
 ## Hard Rules
 
+- Run the repository's own ci-local (`npx ci-local`, `pnpm exec ci-local`), never a global install: the version is the repository's.
 - Launch a run in the background (`bash_background` or equivalent) and wait for its exit notice; never poll, never `sleep`.
 - Add `--quiet` to unwatched runs: milestones and the summary on stdout, each step's output in its own log.
 - Do not touch the checkout while a run is in flight (no edits, no branch switch): the steps read it.
