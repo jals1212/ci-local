@@ -458,6 +458,7 @@ Options:
   --events FILE   Append one JSON line per milestone (run, step start, ok,
                   fail, end) to FILE, emptied first: tail -f it from another
                   terminal. Or CI_LOCAL_EVENTS=FILE.
+                  --list, --print-plan and --down ignore both.
   --list          Print the steps that would run, and exit.
   --print-plan    Print the whole plan as JSON (for parity checks), and exit.
   --version       Print the version, and exit.
@@ -481,6 +482,17 @@ HELP=0
 QUIET=0
 case "${CI_LOCAL_QUIET:-}" in '' | 0 | false) ;; *) QUIET=1 ;; esac
 EVENTS="${CI_LOCAL_EVENTS:-}"
+# --quiet and --events given on this command line (not from the environment,
+# a standing preference): an option that runs no step says it ignores them.
+RUN_OPTIONS_GIVEN=""
+
+# ignored_with MODE: the warning, on stderr so --print-plan's JSON stays clean.
+ignored_with() {
+  local option
+  for option in $RUN_OPTIONS_GIVEN; do
+    echo "ci-local: $option is ignored with $1: it runs no step" >&2
+  done
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -493,9 +505,9 @@ while [[ $# -gt 0 ]]; do
     --rebuild) REBUILD=1; shift ;;
     --list) LIST_ONLY=1; shift ;;
     --print-plan) PRINT_PLAN=1; shift ;;
-    --quiet) QUIET=1; shift ;;
-    --events) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die_usage "--events needs a file name"; EVENTS=$2; shift 2 ;;
-    --events=*) EVENTS=${1#--events=}; [[ -n "$EVENTS" ]] || die_usage "--events needs a file name"; shift ;;
+    --quiet) QUIET=1; RUN_OPTIONS_GIVEN+=" --quiet"; shift ;;
+    --events) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die_usage "--events needs a file name"; EVENTS=$2; RUN_OPTIONS_GIVEN+=" --events"; shift 2 ;;
+    --events=*) EVENTS=${1#--events=}; [[ -n "$EVENTS" ]] || die_usage "--events needs a file name"; RUN_OPTIONS_GIVEN+=" --events"; shift ;;
     --version) echo "ci-local $CI_LOCAL_VERSION"; exit 0 ;;
     -h | --help) HELP=1; shift ;;
     *) die_usage "unknown option: $1" ;;
@@ -573,9 +585,10 @@ for i in ${PLAN_NAMES[@]+"${!PLAN_NAMES[@]}"}; do
   [[ $keep -eq 0 ]] || RUN_INDEXES+=("$i")
 done
 
-if [[ $PRINT_PLAN -eq 1 ]]; then print_plan; exit 0; fi
+if [[ $PRINT_PLAN -eq 1 ]]; then ignored_with --print-plan; print_plan; exit 0; fi
 
 if [[ $LIST_ONLY -eq 1 ]]; then
+  ignored_with --list
   n=0
   for i in ${RUN_INDEXES[@]+"${RUN_INDEXES[@]}"}; do
     n=$((n + 1))
@@ -589,6 +602,7 @@ docker version --format '{{.Server.Version}}' >/dev/null 2>&1 ||
   { echo "ci-local: the docker daemon is not reachable" >&2; exit 2; }
 
 if [[ $DOWN_ONLY -eq 1 ]]; then
+  ignored_with --down
   teardown
   echo "Removed what project $CI_PROJECT left."
   exit 0

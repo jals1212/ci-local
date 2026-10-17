@@ -17,7 +17,11 @@ their `release x.y.z:` commit messages.
 - `--events FILE` (or `CI_LOCAL_EVENTS=FILE`): one JSON line per milestone,
   `run`, `start`, `ok`, `fail` and `end`, with `ts`, the step's name, index
   and total, `durationMs` and `exitCode`, so a run can be followed with
-  `tail -f`. The file is emptied when the run starts.
+  `tail -f`. The file is emptied when the run starts; one that cannot be
+  written stops the run before any step, with status 2.
+- `--list`, `--print-plan` and `--down` warn on stderr that they ignore
+  `--quiet` and `--events` given on the command line (not when set in the
+  environment).
 - README: "Following a run".
 
 ### Unchanged

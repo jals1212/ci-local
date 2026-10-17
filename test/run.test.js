@@ -236,6 +236,37 @@ test('an interrupted step: the summary still reaches the terminal, and the event
   }
 })
 
+test('an --events file that cannot be written is a status 2, before any step runs', async () => {
+  const dir = project(["ci_step box Marker 'touch ran-a-step'"])
+  for (const file of [join(dir, 'no-such-dir', 'events.ndjson'), dir]) {
+    const { status, err } = await ciLocal(['--events', file], { cwd: dir })
+    assert.equal(status, 2, file)
+    assert.match(err, /ci-local: cannot write the --events file /, file)
+    assert.equal(existsSync(join(dir, 'ran-a-step')), false, file)
+  }
+})
+
+test('--events and --quiet say so when the option runs no step, and write nothing', async () => {
+  const dir = project(["ci_step box X 'true'"])
+  const file = join(dir, 'events.ndjson')
+  for (const mode of ['--list', '--print-plan', '--down']) {
+    const { status, out, err } = await ciLocal([mode, '--events', file, '--quiet'], { cwd: dir })
+    assert.equal(status, 0, mode)
+    assert.match(err, new RegExp(`ci-local: --events is ignored with ${mode}: it runs no step\\n`), mode)
+    assert.match(err, new RegExp(`ci-local: --quiet is ignored with ${mode}: it runs no step\\n`), mode)
+    assert.equal(existsSync(file), false, mode)
+    if (mode === '--print-plan') assert.equal(JSON.parse(out).project, 'ci-local-selftest')
+  }
+  // Set in the environment, they are a standing preference: no warning.
+  const { status, err } = await ciLocal(['--list'], {
+    cwd: dir,
+    env: { CI_LOCAL_EVENTS: file, CI_LOCAL_QUIET: '1' },
+  })
+  assert.equal(status, 0)
+  assert.equal(err, '')
+  assert.equal(existsSync(file), false)
+})
+
 test('--events needs a file name', async () => {
   const { status, err } = await ciLocal(['--events', '--list'], { cwd: project(["ci_step box X 'true'"]) })
   assert.equal(status, 2)

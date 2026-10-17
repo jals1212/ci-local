@@ -145,7 +145,16 @@ Step output: /tmp/myapp-ci-logs.Xa81Qe
 
 **`--events FILE`** (or `CI_LOCAL_EVENTS=FILE`): one JSON object per line for
 every milestone, for another terminal or a status display. The file is emptied
-when the run starts; a relative path is taken from where you run ci-local.
+when the run starts; a relative path is taken from where you run ci-local. A
+file that cannot be written stops the run before any step, with status 2.
+
+Put the file outside the checkout (inside, it is an uncommitted change in the
+summary) and in a directory only you can write: emptying a fixed name in a
+shared `/tmp` follows whatever another user left there under that name.
+
+With `--list`, `--print-plan` or `--down`, which run no step, `--quiet` and
+`--events` given on the command line are ignored, with a warning on stderr.
+Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
@@ -157,11 +166,12 @@ when the run starts; a relative path is taken from where you run ci-local.
 
 ```sh
 # terminal 1
-npx ci-local --quiet --events /tmp/myapp-ci.ndjson
+mkdir -p ~/.cache/ci-local
+npx ci-local --quiet --events ~/.cache/ci-local/myapp-ci.ndjson
 
 # terminal 2
-tail -f /tmp/myapp-ci.ndjson
-tail -f /tmp/myapp-ci.ndjson |
+tail -f ~/.cache/ci-local/myapp-ci.ndjson
+tail -f ~/.cache/ci-local/myapp-ci.ndjson |
   jq -r --unbuffered '"\(.ts[11:19]) \(.event) \(.step // .result // .project) \(if .durationMs then "(\(.durationMs / 1000 | floor)s)" else "" end)"'
 ```
 
