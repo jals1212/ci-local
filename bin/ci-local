@@ -1119,6 +1119,19 @@ events_owner() {
   return 0
 }
 
+# Checked writable first, without emptying it: another run of this project
+# may still be writing it.
+if [[ -n "$EVENTS" ]]; then
+  : 2>/dev/null >>"$EVENTS" || { echo "ci-local: cannot write the --events file $EVENTS" >&2; exit 2; }
+elif [[ $EVENTS_OFF -eq 0 ]]; then
+  # The default file is a convenience for --status: never a reason to stop.
+  if make_cache_dir 2>/dev/null && : 2>/dev/null >>"$DEFAULT_EVENTS"; then
+    EVENTS=$DEFAULT_EVENTS
+  else
+    echo "ci-local: cannot write the events file $DEFAULT_EVENTS: --status will not see this run" >&2
+  fi
+fi
+# The step logs: made only once nothing above can stop the run.
 if [[ $QUIET -eq 1 ]]; then
   tmp="${TMPDIR:-/tmp}"
   LOG_DIR="$(mktemp -d "${tmp%/}/$CI_PROJECT-logs.XXXXXX")"
@@ -1173,18 +1186,6 @@ claim_events() {
   [[ -z "$OWNER" ]]
 }
 
-# Checked writable first, without emptying it: another run of this project
-# may still be writing it.
-if [[ -n "$EVENTS" ]]; then
-  : 2>/dev/null >>"$EVENTS" || { echo "ci-local: cannot write the --events file $EVENTS" >&2; exit 2; }
-elif [[ $EVENTS_OFF -eq 0 ]]; then
-  # The default file is a convenience for --status: never a reason to stop.
-  if make_cache_dir 2>/dev/null && : 2>/dev/null >>"$DEFAULT_EVENTS"; then
-    EVENTS=$DEFAULT_EVENTS
-  else
-    echo "ci-local: cannot write the events file $DEFAULT_EVENTS: --status will not see this run" >&2
-  fi
-fi
 # The file is claimed with the first queued event (emit_position), once the
 # run knows its place. A file a live run still writes is left to it: this run
 # takes it over at its turn (the queue lets the other run end first), and

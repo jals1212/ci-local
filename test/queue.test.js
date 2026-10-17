@@ -28,6 +28,9 @@ const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
 chmodSync(join(FAKE_DOCKER, 'docker'), 0o755)
 
+// Root ignores directory permissions: tests that rely on them cannot run as root.
+const asRoot = process.getuid?.() === 0 && 'root ignores directory permissions'
+
 const scratch = (prefix = 'q-') => mkdtempSync(join(tmpdir(), `ci-local-${prefix}`))
 
 /** A project directory named `name` with this plan (the body of ci_plan). */
@@ -607,7 +610,7 @@ test('a claim left by a dead run (older than 10 seconds) is broken', async () =>
   assert.equal(defaultEvents(cache, 'claim-ci').at(-1).result, 'passed')
 })
 
-test('an events file whose directory takes no .claim: the run writes it without a claim, as before 0.4.0', async () => {
+test('an events file whose directory takes no .claim: the run writes it without a claim, as before 0.4.0', { skip: asRoot }, async () => {
   const dir = project('claim-ci', [WORK])
   const locked = scratch('locked-')
   const file = join(locked, 'events.ndjson')
@@ -627,7 +630,7 @@ test('an events file whose directory takes no .claim: the run writes it without 
   }
 })
 
-test('a stale claim that cannot be removed does not spin: the run gives it up at once', async () => {
+test('a stale claim that cannot be removed does not spin: the run gives it up at once', { skip: asRoot }, async () => {
   const dir = project('claim-ci', [WORK])
   const locked = scratch('locked-')
   const file = join(locked, 'events.ndjson')

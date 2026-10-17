@@ -319,3 +319,14 @@ test('--events needs a file name', async () => {
   assert.equal(status, 2)
   assert.match(err, /--events needs a file/)
 })
+
+test('--quiet with an --events file that cannot be written leaves no log directory behind', async () => {
+  const dir = project(["ci_step box X 'true'"])
+  const tmp = mkdtempSync(join(tmpdir(), 'ci-local-tmp-'))
+  const { status, err } = await ciLocal(['--quiet', '--events', join(dir, 'no-such-dir', 'e.ndjson')], {
+    cwd: dir,
+    env: { TMPDIR: tmp },
+  })
+  assert.equal(status, 2, err)
+  assert.deepEqual(readdirSync(tmp), [], 'no ci-local-selftest-logs.* directory left in TMPDIR')
+})
