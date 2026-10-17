@@ -5,6 +5,25 @@ Each release of `@jals1212/ci-local`. Versions follow
 options and a patch version fixes. Releases before 0.3.0 are described in
 their `release x.y.z:` commit messages.
 
+## 0.4.0
+
+### Added
+
+- `--status`: the state of the last run (running, passed, failed or stopped)
+  as three lines of Markdown, from its events file: the step under way and
+  how long it has run, or the failing step, its exit code and log, and
+  whether the development stack was left alone. Exit status 0 passed,
+  1 failed, 2 no run recorded, 3 running, 4 stopped. Needs no Docker; with
+  `--events FILE`, no config either.
+- Events by default: without `--events`, a run writes them to
+  `~/.cache/ci-local/<project>.ndjson` (under `XDG_CACHE_HOME` when set) and
+  names the file at the start; one it cannot write is a warning, not a
+  stop. `CI_LOCAL_EVENTS=off` writes none.
+- Event fields: `run` carries `version`, `pid`, `commit`, `args` and
+  `logDir`; `start`, `ok` and `fail` carry the step's `log` with `--quiet`;
+  `end` carries `devStack` (`untouched`, `changed`, `none`). Existing fields
+  are unchanged.
+
 ## 0.3.0
 
 ### Added

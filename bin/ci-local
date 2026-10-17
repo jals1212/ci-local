@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-CI_LOCAL_VERSION="0.3.0"
+CI_LOCAL_VERSION="0.4.0"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
@@ -459,8 +459,14 @@ Options:
                   failing step's log, and the summary. Or CI_LOCAL_QUIET=1.
   --events FILE   Append one JSON line per milestone (run, step start, ok,
                   fail, end) to FILE, emptied first: tail -f it from another
-                  terminal. Or CI_LOCAL_EVENTS=FILE.
+                  terminal. Or CI_LOCAL_EVENTS=FILE. Without it a run writes
+                  them to ~/.cache/ci-local/<project>.ndjson (under
+                  XDG_CACHE_HOME when set); CI_LOCAL_EVENTS=off writes none.
                   --list, --print-plan and --down ignore both.
+  --status        Print the state of the last run (running, passed, failed,
+                  stopped) as a short Markdown block, from its events file
+                  (the default one, or --events FILE), and exit: 0 passed,
+                  1 failed, 2 no run recorded, 3 running, 4 stopped.
   --list          Print the steps that would run, and exit.
   --print-plan    Print the whole plan as JSON (for parity checks), and exit.
   --version       Print the version, and exit.
@@ -481,9 +487,16 @@ REBUILD=0
 LIST_ONLY=0
 PRINT_PLAN=0
 HELP=0
+STATUS=0
 QUIET=0
 case "${CI_LOCAL_QUIET:-}" in '' | 0 | false) ;; *) QUIET=1 ;; esac
 EVENTS="${CI_LOCAL_EVENTS:-}"
+# Without --events a run writes to the default file (see DEFAULT_EVENTS);
+# CI_LOCAL_EVENTS=off writes none.
+EVENTS_OFF=0
+case "$EVENTS" in 0 | off | false | no) EVENTS=""; EVENTS_OFF=1 ;; esac
+# The command line as given, for the run event (and --status).
+ORIG_ARGS=("$@")
 # --quiet and --events given on this command line (not from the environment,
 # a standing preference): an option that runs no step says it ignores them.
 RUN_OPTIONS_GIVEN=""
@@ -508,8 +521,9 @@ while [[ $# -gt 0 ]]; do
     --list) LIST_ONLY=1; shift ;;
     --print-plan) PRINT_PLAN=1; shift ;;
     --quiet) QUIET=1; RUN_OPTIONS_GIVEN+=" --quiet"; shift ;;
-    --events) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die_usage "--events needs a file name"; EVENTS=$2; RUN_OPTIONS_GIVEN+=" --events"; shift 2 ;;
-    --events=*) EVENTS=${1#--events=}; [[ -n "$EVENTS" ]] || die_usage "--events needs a file name"; RUN_OPTIONS_GIVEN+=" --events"; shift ;;
+    --events) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die_usage "--events needs a file name"; EVENTS=$2; EVENTS_OFF=0; RUN_OPTIONS_GIVEN+=" --events"; shift 2 ;;
+    --events=*) EVENTS=${1#--events=}; [[ -n "$EVENTS" ]] || die_usage "--events needs a file name"; EVENTS_OFF=0; RUN_OPTIONS_GIVEN+=" --events"; shift ;;
+    --status) STATUS=1; shift ;;
     --version) echo "ci-local $CI_LOCAL_VERSION"; exit 0 ;;
     -h | --help) HELP=1; shift ;;
     *) die_usage "unknown option: $1" ;;
@@ -518,6 +532,20 @@ done
 
 # A relative --events path is the caller's, not the repository root's.
 [[ -z "$EVENTS" || "$EVENTS" == /* ]] || EVENTS="$(pwd -P)/$EVENTS"
+
+# --status FILE: the last run's state, rendered from its events by status.js.
+show_status() {
+  command -v node >/dev/null || { echo "ci-local: --status needs node" >&2; exit 2; }
+  exec node "$CI_LOCAL_HOME/status.js" "$1"
+}
+
+if [[ $STATUS -eq 1 && $HELP -eq 0 ]]; then
+  [[ -z "$ONLY$SKIP" && $KEEP$DOWN_ONLY$REBUILD$LIST_ONLY$PRINT_PLAN == 00000 && "$RUN_OPTIONS_GIVEN" != *--quiet* ]] ||
+    die_usage "--status takes only --events"
+  # An events file named on the command line or in the environment needs no
+  # config: --status reads it from anywhere.
+  [[ -z "$EVENTS" ]] || show_status "$EVENTS"
+fi
 
 REPO="$(find_repo)" || {
   [[ $HELP -eq 0 ]] || { usage; exit 0; }
@@ -540,6 +568,10 @@ done < <(declare -F)
 
 [[ "$CI_PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
   { echo "ci-local: CI_PROJECT must be a lowercase name, got '$CI_PROJECT'" >&2; exit 2; }
+# Where a run writes its events without --events, and --status reads them:
+# outside the checkout, in the user's own cache.
+DEFAULT_EVENTS="${XDG_CACHE_HOME:-$HOME/.cache}/ci-local/$CI_PROJECT.ndjson"
+[[ $STATUS -eq 0 ]] || show_status "$DEFAULT_EVENTS"
 [[ ${#CI_JOBS[@]} -gt 0 ]] || { echo "ci-local: CI_JOBS is empty" >&2; exit 2; }
 [[ "$(type -t ci_plan)" == function ]] || { echo "ci-local: the config defines no ci_plan function" >&2; exit 2; }
 CI_NETWORK="${CI_NETWORK:-$CI_PROJECT}"
@@ -687,11 +719,14 @@ run_plan() {
     began=$SECONDS
     CURRENT_STEP="${PLAN_NAMES[$i]}"
     CURRENT_FIELDS="\"step\":$(json_string "${PLAN_NAMES[$i]}"),\"index\":$((n + 1)),\"total\":$total"
+    if [[ $QUIET -eq 1 ]]; then
+      CURRENT_LOG="$(step_log $((n + 1)) "${PLAN_NAMES[$i]}")"
+      CURRENT_FIELDS+=",\"log\":$(json_string "$CURRENT_LOG")"
+    fi
     emit_event "" "\"event\":\"start\",$CURRENT_FIELDS"
     CURRENT_MS=${EV_MS:-} # the start event's time: the step's durationMs counts from it
     set +e
     if [[ $QUIET -eq 1 ]]; then
-      CURRENT_LOG="$(step_log $((n + 1)) "${PLAN_NAMES[$i]}")"
       run_step "$i" >"$CURRENT_LOG" 2>&1
     else
       run_step "$i"
@@ -754,12 +789,15 @@ finish() {
     echo "Removing project $CI_PROJECT (runner, services, network, node_modules volume)"
     teardown
   fi
+  local dev_stack=none
   if [[ -n "$DEV_BEFORE" ]]; then
     local after
     after="$(dev_snapshot)"
     if [[ "$after" == "$DEV_BEFORE" ]]; then
+      dev_stack=untouched
       echo "Development stack untouched: $(grep -c . <<<"$DEV_BEFORE") container(s), same ids and start times as before."
     else
+      dev_stack=changed
       echo "WARNING: the development stack changed during this run:" >&2
       diff <(echo "$DEV_BEFORE") <(echo "$after") >&2
       [[ $status -ne 0 ]] || status=1
@@ -774,13 +812,20 @@ finish() {
     else
       result=failed # a failing step, or a development stack that changed
     fi
-    emit_event "$RUN_MS" "\"event\":\"end\",\"result\":\"$result\""
+    emit_event "$RUN_MS" "\"event\":\"end\",\"result\":\"$result\",\"devStack\":\"$dev_stack\""
   fi
   exit "$status"
 }
 
 if [[ -n "$EVENTS" ]]; then
   : 2>/dev/null >"$EVENTS" || { echo "ci-local: cannot write the --events file $EVENTS" >&2; exit 2; }
+elif [[ $EVENTS_OFF -eq 0 ]]; then
+  # The default file is a convenience for --status: never a reason to stop.
+  if mkdir -p "${DEFAULT_EVENTS%/*}" 2>/dev/null && : 2>/dev/null >"$DEFAULT_EVENTS"; then
+    EVENTS=$DEFAULT_EVENTS
+  else
+    echo "ci-local: cannot write the events file $DEFAULT_EVENTS: --status will not see this run" >&2
+  fi
 fi
 if [[ $QUIET -eq 1 ]]; then
   tmp="${TMPDIR:-/tmp}"
@@ -798,6 +843,11 @@ trap 'exit 143' TERM
 
 echo "ci-local $CI_LOCAL_VERSION: ${#RUN_INDEXES[@]} steps, node ${NODE_VERSION}, project ${CI_PROJECT}, jobs: ${SELECTED[*]}"
 [[ -z "$LOG_DIR" ]] || echo "Step output: $LOG_DIR"
+if [[ "$EVENTS" == "$DEFAULT_EVENTS" ]]; then
+  echo "Events: $EVENTS (ci-local --status)"
+elif [[ -n "$EVENTS" ]]; then
+  echo "Events: $EVENTS (ci-local --status --events $EVENTS)"
+fi
 if [[ -n "$DEV_BEFORE" ]]; then
   echo "Development stack, left alone:"
   while read -r line; do echo "  ${line:0:100}"; done <<<"$DEV_BEFORE"
@@ -806,7 +856,15 @@ fi
 teardown
 PLAN_STARTED=1
 # RUN_MS: the run event's time, from which the end event's durationMs counts.
-emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]}"
+# The commit the steps see; null outside a git checkout.
+RUN_COMMIT=null
+if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  RUN_COMMIT="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null)" && RUN_COMMIT="$(json_string "$RUN_COMMIT")" || RUN_COMMIT=null
+fi
+RUN_LOG_DIR=null
+[[ -z "$LOG_DIR" ]] || RUN_LOG_DIR="$(json_string "$LOG_DIR")"
+# pid: --status tells a run still going from one killed before its end event.
+emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR"
 RUN_MS=${EV_MS:-}
 # Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
 # subshells included, and host steps rely on it.

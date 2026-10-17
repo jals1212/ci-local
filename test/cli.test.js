@@ -87,7 +87,7 @@ test('--help documents every option, with or without a config', () => {
   for (const cwd of [FIXTURE, tmpdir()]) {
     const { status, out } = ciLocal(['--help'], { cwd })
     assert.equal(status, 0)
-    for (const option of ['--only', '--skip', '--keep', '--down', '--rebuild', '--list', '--print-plan', '--version', '--quiet', '--events']) {
+    for (const option of ['--only', '--skip', '--keep', '--down', '--rebuild', '--list', '--print-plan', '--version', '--quiet', '--events', '--status']) {
       assert.match(out, new RegExp(`\\n  ${option}\\b`), option)
     }
   }

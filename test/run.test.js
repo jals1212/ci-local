@@ -40,7 +40,13 @@ function ciLocal(args, { cwd, env = {} }) {
     delete base.CI_LOCAL_EVENTS
     child = spawn('bash', [BIN, ...args], {
       cwd,
-      env: { ...base, PATH: `${FAKE_DOCKER}:${process.env.PATH}`, ...env },
+      env: {
+        ...base,
+        // The default events file goes under it: never the real ~/.cache.
+        XDG_CACHE_HOME: mkdtempSync(join(tmpdir(), 'ci-local-cache-')),
+        PATH: `${FAKE_DOCKER}:${process.env.PATH}`,
+        ...env,
+      },
     })
     const lines = []
     let out = ''
@@ -160,8 +166,24 @@ test('--events writes one JSON object per milestone, in order, with --only and -
     ]
   )
   const [run, start, ok] = events
-  assert.deepEqual(Object.keys(run).sort(), ['event', 'jobs', 'project', 'total', 'ts'])
+  assert.deepEqual(Object.keys(run).sort(), [
+    'args',
+    'commit',
+    'event',
+    'jobs',
+    'logDir',
+    'pid',
+    'project',
+    'total',
+    'ts',
+    'version',
+  ])
   assert.equal(run.project, 'ci-local-selftest')
+  assert.deepEqual(run.args, ['--only', 'a', '--skip', 'audit', '--keep', '--events', file])
+  assert.equal(run.commit, null, 'not a git checkout')
+  assert.equal(run.logDir, null, 'not --quiet')
+  assert.equal(typeof run.pid, 'number')
+  assert.match(run.version, /^\d+\.\d+\.\d+$/)
   assert.deepEqual(run.jobs, ['a'])
   assert.equal(run.total, 2)
   assert.deepEqual(Object.keys(start).sort(), ['event', 'index', 'step', 'total', 'ts'])
@@ -170,8 +192,9 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   assert.equal(typeof ok.durationMs, 'number')
   assert.ok(ok.durationMs >= 0)
   const end = events.at(-1)
-  assert.deepEqual(Object.keys(end).sort(), ['durationMs', 'event', 'result', 'ts'])
+  assert.deepEqual(Object.keys(end).sort(), ['devStack', 'durationMs', 'event', 'result', 'ts'])
   assert.equal(end.result, 'passed')
+  assert.equal(end.devStack, 'none', 'no compose container of this checkout')
   for (const event of events) assert.match(event.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
   const times = events.map((event) => Date.parse(event.ts))
   assert.deepEqual(times, [...times].sort((x, y) => x - y))
