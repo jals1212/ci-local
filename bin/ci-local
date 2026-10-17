@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-CI_LOCAL_VERSION="0.2.0"
+CI_LOCAL_VERSION="0.3.0"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
@@ -359,6 +359,39 @@ json_array() {
   printf ']'
 }
 
+# --events: EV_MS (epoch milliseconds) and EV_TS (ISO 8601, UTC) for now.
+event_time() {
+  local now
+  if now="$(perl -MTime::HiRes=time -MPOSIX=strftime -e \
+    '$t = time; printf "%d %s.%03dZ\n", $t * 1000, strftime("%Y-%m-%dT%H:%M:%S", gmtime($t)), ($t - int($t)) * 1000' 2>/dev/null)"; then
+    EV_MS=${now%% *}
+    EV_TS=${now#* }
+  else
+    EV_MS="$(date +%s)000"
+    EV_TS="$(date -u +%Y-%m-%dT%H:%M:%S).000Z"
+  fi
+}
+
+# emit_event SINCE_MS FIELDS: one line in the --events file. FIELDS is the
+# JSON members after "ts"; with SINCE_MS, "durationMs" since then is added.
+emit_event() {
+  [[ -n "$EVENTS" ]] || return 0
+  event_time
+  local since=$1 fields=$2
+  [[ -z "$since" ]] || fields+=",\"durationMs\":$((EV_MS - since))"
+  # One write per line, so a reader never sees half of one.
+  printf '{"ts":"%s",%s}\n' "$EV_TS" "$fields" >>"$EVENTS" || true
+}
+
+# --quiet: the log file of a step, NN-name.log.
+step_log() {
+  local slug
+  slug="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+  slug="${slug#-}"
+  slug="${slug%-}"
+  printf '%s/%02d-%s.log' "$LOG_DIR" "$1" "${slug:0:60}"
+}
+
 # The plan as JSON, for parity checks: `@jals1212/ci-local/parity`.
 print_plan() {
   local i fn
@@ -419,6 +452,12 @@ Options:
                   (docker exec -it ${CI_PROJECT:-<project>}-runner bash). --down removes them.
   --down          Remove what --keep left, and exit.
   --rebuild       Rebuild the runner image even if it exists.
+  --quiet         Write each step's output to a log file instead of the
+                  terminal; print only the step milestones, the end of a
+                  failing step's log, and the summary. Or CI_LOCAL_QUIET=1.
+  --events FILE   Append one JSON line per milestone (run, step start, ok,
+                  fail, end) to FILE, emptied first: tail -f it from another
+                  terminal. Or CI_LOCAL_EVENTS=FILE.
   --list          Print the steps that would run, and exit.
   --print-plan    Print the whole plan as JSON (for parity checks), and exit.
   --version       Print the version, and exit.
@@ -439,6 +478,9 @@ REBUILD=0
 LIST_ONLY=0
 PRINT_PLAN=0
 HELP=0
+QUIET=0
+case "${CI_LOCAL_QUIET:-}" in '' | 0 | false) ;; *) QUIET=1 ;; esac
+EVENTS="${CI_LOCAL_EVENTS:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -451,11 +493,17 @@ while [[ $# -gt 0 ]]; do
     --rebuild) REBUILD=1; shift ;;
     --list) LIST_ONLY=1; shift ;;
     --print-plan) PRINT_PLAN=1; shift ;;
+    --quiet) QUIET=1; shift ;;
+    --events) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die_usage "--events needs a file name"; EVENTS=$2; shift 2 ;;
+    --events=*) EVENTS=${1#--events=}; [[ -n "$EVENTS" ]] || die_usage "--events needs a file name"; shift ;;
     --version) echo "ci-local $CI_LOCAL_VERSION"; exit 0 ;;
     -h | --help) HELP=1; shift ;;
     *) die_usage "unknown option: $1" ;;
   esac
 done
+
+# A relative --events path is the caller's, not the repository root's.
+[[ -z "$EVENTS" || "$EVENTS" == /* ]] || EVENTS="$(pwd -P)/$EVENTS"
 
 REPO="$(find_repo)" || {
   [[ $HELP -eq 0 ]] || { usage; exit 0; }
@@ -558,6 +606,12 @@ PLAN_STARTED=0
 STARTED=$SECONDS
 DEV_BEFORE=""
 CHECKOUT=""
+LOG_DIR=""
+RUN_MS=""
+CURRENT_STEP="" # the name of the step running, for an interrupt
+CURRENT_LOG=""
+CURRENT_MS=""
+CURRENT_FIELDS=""
 
 print_summary() {
   local i n=0 line
@@ -593,7 +647,7 @@ run_step() {
     (
       set -e
       eval "${PLAN_CMDS[$i]}"
-    ) &
+    ) 3>&- 4>&- &
     wait $!
     return
   fi
@@ -603,8 +657,9 @@ run_step() {
   args+=("$RUNNER")
   [[ -z "${PLAN_TIMEOUTS[$i]}" ]] || args+=(timeout --kill-after=30 "${PLAN_TIMEOUTS[$i]}")
   # In the background and waited for, so an interrupt is handled at once and
-  # the cleanup removes the runner, which ends the step.
-  docker "${args[@]}" bash -eo pipefail -c "${PLAN_CMDS[$i]}" &
+  # the cleanup removes the runner, which ends the step. Without the
+  # terminal's saved descriptors (3, 4): a step must not hold them open.
+  docker "${args[@]}" bash -eo pipefail -c "${PLAN_CMDS[$i]}" 3>&- 4>&- &
   wait $!
 }
 
@@ -614,22 +669,38 @@ run_plan() {
     echo
     echo "==> [$((n + 1))/$total] ${PLAN_NAMES[$i]}"
     began=$SECONDS
+    CURRENT_STEP="${PLAN_NAMES[$i]}"
+    CURRENT_FIELDS="\"step\":$(json_string "${PLAN_NAMES[$i]}"),\"index\":$((n + 1)),\"total\":$total"
+    emit_event "" "\"event\":\"start\",$CURRENT_FIELDS"
+    CURRENT_MS=${EV_MS:-}
     set +e
-    run_step "$i"
+    if [[ $QUIET -eq 1 ]]; then
+      CURRENT_LOG="$(step_log $((n + 1)) "${PLAN_NAMES[$i]}")"
+      run_step "$i" >"$CURRENT_LOG" 2>&1
+    else
+      run_step "$i"
+    fi
     code=$?
     set -e
+    CURRENT_STEP=""
     elapsed=$((SECONDS - began))
     DURATIONS[n]="$(fmt_duration "$elapsed")"
     if [[ $code -eq 0 ]]; then
       RESULTS[n]="ok"
+      emit_event "$CURRENT_MS" "\"event\":\"ok\",$CURRENT_FIELDS"
       echo "<== ${PLAN_NAMES[$i]}: ok ($(fmt_duration "$elapsed"))"
     else
       RESULTS[n]="FAILED"
       FAILED_STEP="${PLAN_NAMES[$i]}"
+      emit_event "$CURRENT_MS" "\"event\":\"fail\",$CURRENT_FIELDS,\"exitCode\":$code"
       if [[ -n "${PLAN_TIMEOUTS[$i]}" && ($code -eq 124 || $code -eq 137) ]]; then
         echo "<== ${PLAN_NAMES[$i]}: TIMED OUT after $(fmt_duration "${PLAN_TIMEOUTS[$i]}")" >&2
       else
         echo "<== ${PLAN_NAMES[$i]}: FAILED with exit code $code ($(fmt_duration "$elapsed"))" >&2
+      fi
+      if [[ $QUIET -eq 1 ]]; then
+        echo "Last 40 lines of $CURRENT_LOG:" >&2
+        tail -n 40 "$CURRENT_LOG" | sed 's/^/  /' >&2
       fi
       return 1
     fi
@@ -641,8 +712,15 @@ finish() {
   local status=$?
   trap - EXIT INT TERM
   set +e
+  # An interrupt in a --quiet step lands here with its output still going
+  # to the step's log: back to the terminal.
+  exec 1>&3 2>&4
   if [[ $PLAN_STARTED -eq 1 && $SUMMARY_PRINTED -eq 0 ]]; then
     FAILED_STEP="${FAILED_STEP:-interrupted}"
+    if [[ -n "$CURRENT_STEP" ]]; then
+      emit_event "$CURRENT_MS" "\"event\":\"fail\",$CURRENT_FIELDS,\"exitCode\":$status"
+      [[ $QUIET -eq 0 ]] || echo "Output of the interrupted step: $CURRENT_LOG" >&2
+    fi
     print_summary
     [[ $status -ne 0 ]] || status=1
   fi
@@ -671,9 +749,25 @@ finish() {
       [[ $status -ne 0 ]] || status=1
     fi
   fi
+  if [[ $PLAN_STARTED -eq 1 ]]; then
+    local result=passed
+    [[ $status -eq 0 ]] || result=failed
+    [[ "$FAILED_STEP" != interrupted ]] || result=interrupted
+    emit_event "$RUN_MS" "\"event\":\"end\",\"result\":\"$result\""
+  fi
   exit "$status"
 }
 
+if [[ -n "$EVENTS" ]]; then
+  : 2>/dev/null >"$EVENTS" || { echo "ci-local: cannot write the --events file $EVENTS" >&2; exit 2; }
+fi
+if [[ $QUIET -eq 1 ]]; then
+  tmp="${TMPDIR:-/tmp}"
+  LOG_DIR="$(mktemp -d "${tmp%/}/$CI_PROJECT-logs.XXXXXX")"
+fi
+
+# The terminal, for finish (see there).
+exec 3>&1 4>&2
 DEV_BEFORE="$(dev_snapshot)"
 # Before any step writes to the checkout.
 CHECKOUT="$(checkout_state)"
@@ -682,6 +776,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 echo "ci-local $CI_LOCAL_VERSION: ${#RUN_INDEXES[@]} steps, node ${NODE_VERSION}, project ${CI_PROJECT}, jobs: ${SELECTED[*]}"
+[[ -z "$LOG_DIR" ]] || echo "Step output: $LOG_DIR"
 if [[ -n "$DEV_BEFORE" ]]; then
   echo "Development stack, left alone:"
   while read -r line; do echo "  ${line:0:100}"; done <<<"$DEV_BEFORE"
@@ -689,6 +784,8 @@ fi
 # A run left by --keep, or one that was killed: always start clean.
 teardown
 PLAN_STARTED=1
+emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]}"
+RUN_MS=${EV_MS:-}
 # Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
 # subshells included, and host steps rely on it.
 set +e

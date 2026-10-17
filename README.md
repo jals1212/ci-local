@@ -106,10 +106,76 @@ npx ci-local --only tests     # some jobs
 npx ci-local --list           # the steps, without running them
 npx ci-local --keep           # leave everything up to look at it
 npx ci-local --down           # remove what --keep left
+npx ci-local --quiet          # step output to log files, milestones only
+npx ci-local --events run.ndjson  # one JSON line per milestone, to follow
 ```
 
 `npx ci-local --help` has the rest (`--skip TAGS`, `--rebuild`,
 `--print-plan`).
+
+## Following a run
+
+By default every step's output goes to the terminal **live**, line by line, as
+the command writes it: a test reporter's progress shows as it happens. Each
+step is framed by a milestone when it starts and when it ends:
+
+```text
+==> [9/12] pnpm run test:integration
+...the reporter's output, live...
+<== pnpm run test:integration: ok (7m14s)
+```
+
+Two options change what goes where. Both combine with `--only`, `--skip` and
+`--keep`, and neither changes the summary or the lines after it.
+
+**`--quiet`** (or `CI_LOCAL_QUIET=1`), for a run nobody watches (an agent, a
+background job): each step's output goes to its own log file, and the
+terminal gets only the milestones, the summary and, when a step fails, the
+last 40 lines of its log. The log directory is printed at the start and left
+in place after the run:
+
+```text
+ci-local 0.3.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+Step output: /tmp/myapp-ci-logs.Xa81Qe
+
+==> [1/12] Build the runner image
+<== Build the runner image: ok (0s)
+...
+```
+
+**`--events FILE`** (or `CI_LOCAL_EVENTS=FILE`): one JSON object per line for
+every milestone, for another terminal or a status display. The file is emptied
+when the run starts; a relative path is taken from where you run ci-local.
+
+| `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
+| --- | --- | --- |
+| `run` | the steps are about to run | `project`, `jobs`, `total` |
+| `start` | a step starts | `step`, `index` (from 1), `total` |
+| `ok` | a step passed | `step`, `index`, `total`, `durationMs` |
+| `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs` |
+| `end` | after the cleanup | `result` (`passed`, `failed`, `interrupted`), `durationMs` |
+
+```sh
+# terminal 1
+npx ci-local --quiet --events /tmp/myapp-ci.ndjson
+
+# terminal 2
+tail -f /tmp/myapp-ci.ndjson
+tail -f /tmp/myapp-ci.ndjson |
+  jq -r --unbuffered '"\(.ts[11:19]) \(.event) \(.step // .result // .project) \(if .durationMs then "(\(.durationMs / 1000 | floor)s)" else "" end)"'
+```
+
+```text
+{"ts":"2026-05-02T10:14:03.512Z","event":"run","project":"myapp-ci","jobs":["quality","tests"],"total":6}
+{"ts":"2026-05-02T10:14:03.530Z","event":"start","step":"Build the runner image","index":1,"total":6}
+{"ts":"2026-05-02T10:14:03.871Z","event":"ok","step":"Build the runner image","index":1,"total":6,"durationMs":341}
+...
+{"ts":"2026-05-02T10:15:44.020Z","event":"end","result":"passed","durationMs":100508}
+```
+
+To wait for a run without reading it, wait for the `end` event, or for the
+process to exit and read its summary: its status and the `PASSED:` /
+`FAILED at step:` line are the same in every mode.
 
 ## The parity test
 
