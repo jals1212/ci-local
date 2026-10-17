@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -66,6 +66,15 @@ const summary = (out) =>
   out
     .slice(out.indexOf('ci-local summary:'))
     .replace(/\b\d+m\d{2}s\b|\b\d+s\b/g, '<t>')
+
+/** Resolves when check() is true; fails after timeoutMs. */
+async function until(check, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`still waiting after ${timeoutMs}ms`)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
 
 const arrival = (lines, text) => lines.find((line) => line.text === text)?.at
 
@@ -208,7 +217,9 @@ test('an interrupted step: the summary still reaches the terminal, and the event
     const dir = project(["ci_step box Slow 'echo started; sleep 30'"])
     const file = join(dir, 'events.ndjson')
     const run = ciLocal([...args, '--events', file], { cwd: dir, env: { FAKE_DOCKER_PIDS: join(dir, 'pids') } })
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    // Interrupt once the step is under way (its start event is written), not
+    // after a fixed delay a slow machine may not meet.
+    await until(() => existsSync(file) && readFileSync(file, 'utf8').includes('"event":"start"'))
     run.child.kill('SIGTERM')
     const { status, out, err } = await run
     assert.equal(status, 143, args.join(' '))
