@@ -332,3 +332,16 @@ test('status.js can be imported from a process whose argv[1] is no file (it is t
   assert.equal(result.status, 0, result.stderr)
   assert.equal(result.stdout, 'function\n')
 })
+
+test('--status with CI_LOCAL_EVENTS=off shows no old run: runs write none, so there is none to show', async () => {
+  const dir = project(["ci_step box One 'true'"])
+  const cache = mkdtempSync(join(tmpdir(), 'c-'))
+  await run([], { cwd: dir, cache }) // an old run, in the default file
+  const { status: code, out, err } = status([], { cwd: dir, cache, env: { CI_LOCAL_EVENTS: 'off' } })
+  assert.equal(code, 2)
+  assert.equal(out, '')
+  assert.match(err, /ci-local: CI_LOCAL_EVENTS is off: runs record no events, so --status has none to show\n/)
+  // An --events file named on the command line is still read.
+  const named = status(['--events', join(cache, 'ci-local', 'ci-local-selftest.ndjson')], { cwd: dir, cache, env: { CI_LOCAL_EVENTS: 'off' } })
+  assert.equal(named.status, 0, named.stderr)
+})

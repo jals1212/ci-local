@@ -55,7 +55,8 @@ their `release x.y.z:` commit messages.
   (the run writes no events and says so) instead of being retried forever.
 - The Pi extension takes a relative `CI_LOCAL_EVENTS` from the repository
   root, and follows nothing when runs write no events (`CI_LOCAL_EVENTS=off`,
-  or a refused `TMPDIR` fallback cache) instead of showing an old run (#4).
+  or a refused `TMPDIR` fallback cache) instead of showing an old run (#4);
+  `ci-local --status` says so and exits 2 instead of showing one.
 - With `--quiet`, an `--events` file that cannot be written (status 2) no
   longer leaves an empty step-log directory in `TMPDIR`.
 - `status.js` can be imported by a process whose `argv[1]` is no file

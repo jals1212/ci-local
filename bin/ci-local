@@ -636,7 +636,13 @@ make_cache_dir() {
   # In the shared TMPDIR: whatever exists now must be ours alone.
   [[ $CACHE_BASE_PRIVATE -eq 0 ]] || { private_dir "$CACHE_BASE" && private_dir "$CI_CACHE_DIR"; }
 }
-[[ $STATUS -eq 0 ]] || show_status "$DEFAULT_EVENTS"
+if [[ $STATUS -eq 1 ]]; then
+  # Off in the environment, runs write no events: the default file, if any,
+  # is an old run's, not the last one's.
+  [[ $EVENTS_OFF -eq 0 ]] ||
+    { echo "ci-local: CI_LOCAL_EVENTS is off: runs record no events, so --status has none to show" >&2; exit 2; }
+  show_status "$DEFAULT_EVENTS"
+fi
 [[ ${#CI_JOBS[@]} -gt 0 ]] || { echo "ci-local: CI_JOBS is empty" >&2; exit 2; }
 [[ "$(type -t ci_plan)" == function ]] || { echo "ci-local: the config defines no ci_plan function" >&2; exit 2; }
 CI_NETWORK="${CI_NETWORK:-$CI_PROJECT}"

@@ -468,7 +468,7 @@ warning.
 | --- | --- | --- |
 | 0 | Every step passed, and the development stack is untouched. | The last run passed. |
 | 1 | A step failed, or the development stack changed. | It failed. |
-| 2 | A usage or configuration error; nothing ran. | No run recorded (or an unusable cache). |
+| 2 | A usage or configuration error; nothing ran. | No run recorded (or an unusable cache, or `CI_LOCAL_EVENTS=off`). |
 | 3 | `--no-wait`, and the machine is busy; nothing ran. | Queued, starting or running. |
 | 4 | | Stopped: interrupted, or its process is gone without an end. |
 | 130, 143 | Interrupted (Ctrl-C, `kill`). During the steps the summary still says `FAILED at step: interrupted`; while waiting in the queue nothing ran and nothing is printed. | |
