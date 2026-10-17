@@ -216,10 +216,12 @@ test('an interrupted step: the summary still reaches the terminal, and the event
   for (const args of [[], ['--quiet']]) {
     const dir = project(["ci_step box Slow 'echo started; sleep 30'"])
     const file = join(dir, 'events.ndjson')
-    const run = ciLocal([...args, '--events', file], { cwd: dir, env: { FAKE_DOCKER_PIDS: join(dir, 'pids') } })
-    // Interrupt once the step is under way (its start event is written), not
-    // after a fixed delay a slow machine may not meet.
-    await until(() => existsSync(file) && readFileSync(file, 'utf8').includes('"event":"start"'))
+    const pids = join(dir, 'pids')
+    const run = ciLocal([...args, '--events', file], { cwd: dir, env: { FAKE_DOCKER_PIDS: pids } })
+    // Interrupt once the step's process exists (the fake docker recorded its
+    // pid, so the cleanup's `docker rm` ends it), not after a fixed delay a
+    // slow machine may not meet.
+    await until(() => existsSync(pids) && readFileSync(pids, 'utf8').trim() !== '')
     run.child.kill('SIGTERM')
     const { status, out, err } = await run
     assert.equal(status, 143, args.join(' '))

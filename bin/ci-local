@@ -374,6 +374,8 @@ event_time() {
 
 # emit_event SINCE_MS FIELDS: one line in the --events file. FIELDS is the
 # JSON members after "ts"; with SINCE_MS, "durationMs" since then is added.
+# Leaves the event's time in EV_MS, for the SINCE_MS of a later event; without
+# --events it writes nothing and leaves EV_MS unset.
 emit_event() {
   [[ -n "$EVENTS" ]] || return 0
   event_time
@@ -686,7 +688,7 @@ run_plan() {
     CURRENT_STEP="${PLAN_NAMES[$i]}"
     CURRENT_FIELDS="\"step\":$(json_string "${PLAN_NAMES[$i]}"),\"index\":$((n + 1)),\"total\":$total"
     emit_event "" "\"event\":\"start\",$CURRENT_FIELDS"
-    CURRENT_MS=${EV_MS:-}
+    CURRENT_MS=${EV_MS:-} # the start event's time: the step's durationMs counts from it
     set +e
     if [[ $QUIET -eq 1 ]]; then
       CURRENT_LOG="$(step_log $((n + 1)) "${PLAN_NAMES[$i]}")"
@@ -764,9 +766,14 @@ finish() {
     fi
   fi
   if [[ $PLAN_STARTED -eq 1 ]]; then
-    local result=passed
-    [[ $status -eq 0 ]] || result=failed
-    [[ "$FAILED_STEP" != interrupted ]] || result=interrupted
+    local result
+    if [[ "$FAILED_STEP" == interrupted ]]; then
+      result=interrupted
+    elif [[ $status -eq 0 ]]; then
+      result=passed
+    else
+      result=failed # a failing step, or a development stack that changed
+    fi
     emit_event "$RUN_MS" "\"event\":\"end\",\"result\":\"$result\""
   fi
   exit "$status"
@@ -798,6 +805,7 @@ fi
 # A run left by --keep, or one that was killed: always start clean.
 teardown
 PLAN_STARTED=1
+# RUN_MS: the run event's time, from which the end event's durationMs counts.
 emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]}"
 RUN_MS=${EV_MS:-}
 # Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
