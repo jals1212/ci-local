@@ -3,13 +3,18 @@
 //
 //   node status.js EVENTS_FILE
 //
-// Exit status: 0 passed, 1 failed, 2 no run recorded, 3 running, 4 stopped
-// (interrupted, or the process is gone without an end event).
+// Exit status: 0 passed, 1 failed, 2 no run recorded, 3 queued, starting or
+// running, 4 stopped (interrupted, or the process is gone without an end
+// event, or before its turn came).
 
 import { readFileSync, realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-/** The events of the last run in the file (from its last `run` event). */
+/**
+ * The events of the last run in the file: from its `queued` events (the
+ * first of the last series, which a run repeats while its place changes),
+ * or, in a file from before the queue, from its last `run`.
+ */
 export function lastRun(text) {
   const events = []
   for (const line of text.split('\n')) {
@@ -20,7 +25,9 @@ export function lastRun(text) {
       // A line being written, or not ours: skip it.
     }
   }
-  const start = events.findLastIndex((event) => event.event === 'run')
+  let start = events.findLastIndex((event) => event.event === 'queued')
+  if (start === -1) start = events.findLastIndex((event) => event.event === 'run')
+  else while (start > 0 && events[start - 1].event === 'queued' && events[start - 1].pid === events[start].pid) start--
   return start === -1 ? null : events.slice(start)
 }
 
@@ -47,7 +54,11 @@ const quote = (arg) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll(
  * stopped, with what the block shows. `isAlive` is injectable for tests.
  */
 export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
-  const run = events[0]
+  const queuedEvents = events.filter((event) => event.event === 'queued')
+  const queued = queuedEvents[0] ?? null
+  const lastQueued = queuedEvents.at(-1) ?? null
+  // The run event, once the run has its turn; before, the queued one stands in.
+  const run = events.find((event) => event.event === 'run') ?? events[0]
   const end = events.findLast((event) => event.event === 'end')
   // The step under way, or the last one that failed: a start with no ok after it.
   let step = null
@@ -58,7 +69,9 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
   const fail = events.findLast((event) => event.event === 'fail') ?? null
   let state
   if (end) state = end.result === 'passed' ? 'passed' : end.result === 'interrupted' ? 'stopped' : 'failed'
-  else state = isAlive(run.pid) ? 'running' : 'stopped'
+  else if (!isAlive(run.pid)) state = 'stopped'
+  else if (run.event === 'run') state = 'running'
+  else state = lastQueued.ahead > 0 || lastQueued.blockedBy ? 'queued' : 'starting'
   return {
     state,
     project: run.project,
@@ -73,6 +86,11 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
     end: end ?? null,
     devStack: end?.devStack ?? null,
     elapsedMs: end ? end.durationMs : now - Date.parse(run.ts),
+    // Waiting for a turn: since when, where it stands, and whom for.
+    hasRun: run.event === 'run',
+    ahead: lastQueued?.ahead ?? 0,
+    blockedBy: lastQueued?.blockedBy ?? null,
+    waitingMs: queued ? now - Date.parse(queued.ts) : 0,
   }
 }
 
@@ -85,6 +103,19 @@ export function render(state, eventsFile) {
   const time = duration(state.elapsedMs)
   const log = (step) => (step?.log ? ` · log: \`${step.log}\`` : '')
 
+  if (state.state === 'queued' || state.state === 'starting') {
+    const queued = state.state === 'queued'
+    const behind = state.blockedBy ? `behind ${state.blockedBy.project} (${state.ahead} ahead)` : `${state.ahead} ahead`
+    const waiting = duration(state.waitingMs)
+    return {
+      code: 3,
+      lines: [
+        queued ? `> ⏳ **ci-local** · queued · ${behind}` : '> 🐳 **ci-local** · starting',
+        `> ${[...where, queued ? `waiting ${waiting}` : `${waiting} so far`].join(' · ')}`,
+        `> Follow it: \`tail -f ${eventsFile}\``,
+      ],
+    }
+  }
   if (state.state === 'running') {
     const now = state.step ? ` · [${state.step.index}/${state.step.total}] ${state.step.step}` : ''
     const follow = [`Follow it: \`tail -f ${eventsFile}\``]
@@ -118,6 +149,8 @@ export function render(state, eventsFile) {
   let why
   if (state.end) {
     why = `Interrupted${state.step ? ` during: ${stepRef(state.step)})` : ''} · ${time}${log(state.step)}`
+  } else if (!state.hasRun) {
+    why = `Never started: process ${state.pid} is gone while queued (interrupted, or the machine was busy with --no-wait) · ${duration(state.waitingMs)}`
   } else {
     why = `No end: process ${state.pid} is gone (killed, or Docker froze)${
       state.step ? ` · during: ${stepRef(state.step)})` : ''

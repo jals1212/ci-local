@@ -108,11 +108,11 @@ npx ci-local --keep           # leave everything up to look at it
 npx ci-local --down           # remove what --keep left
 npx ci-local --quiet          # step output to log files, milestones only
 npx ci-local --events run.ndjson  # one JSON line per milestone, to follow
-npx ci-local --status         # the last run: running, passed, failed or stopped
+npx ci-local --status         # the last run: queued, running, passed, failed or stopped
 ```
 
 `npx ci-local --help` has the rest (`--skip TAGS`, `--rebuild`,
-`--print-plan`).
+`--print-plan`, `--no-wait`).
 
 ## Following a run
 
@@ -152,7 +152,8 @@ file that cannot be written stops the run before any step, with status 2.
 
 Without `--events`, a run writes its events to
 `~/.cache/ci-local/<project>.ndjson` (`$XDG_CACHE_HOME/ci-local/` when that is
-set), names it at the start, and goes on with a warning if it cannot write
+set; with neither `XDG_CACHE_HOME` nor `HOME`, a private directory under
+`TMPDIR`), names it at the start, and goes on with a warning if it cannot write
 there. `CI_LOCAL_EVENTS=off` writes no events file.
 
 Put the file outside the checkout (inside, it is an uncommitted change in the
@@ -165,7 +166,8 @@ Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
-| `run` | the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (`--quiet`; else `null`) |
+| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `commit`, `args`, `logDir` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
+| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (`--quiet`; else `null`) |
 | `start` | a step starts | `step`, `index` (from 1), `total`; `log` with `--quiet` |
 | `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` with `--quiet` |
 | `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` with `--quiet` |
@@ -206,6 +208,14 @@ and after it ends. It needs no Docker and changes nothing.
 > `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de` · 6m41s so far
 > Follow it: `tail -f /home/me/.cache/ci-local/myapp-ci.ndjson` · step output: `/tmp/myapp-ci-logs.Xa81Qe`
 
+> ⏳ **ci-local** · queued · behind other-ci (1 ahead)
+> `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de` · waiting 4m12s
+> Follow it: `tail -f /home/me/.cache/ci-local/myapp-ci.ndjson`
+
+> 🐳 **ci-local** · starting
+> `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de` · 2s so far
+> Follow it: `tail -f /home/me/.cache/ci-local/myapp-ci.ndjson`
+
 > ✅ **ci-local** · passed
 > `ci-local` · project `myapp-ci` · `3f2a91c0b7de`
 > 12 steps · 9m03s · every step passed · Development stack untouched.
@@ -219,10 +229,57 @@ and after it ends. It needs no Docker and changes nothing.
 > No end: process 48213 is gone (killed, or Docker froze) · during: pnpm test (step 8/12).
 ```
 
-A run with no `end` event is `running` while its process lives, `stopped` once
-it is gone. Exit status: 0 passed, 1 failed, 2 no run recorded, 3 running,
-4 stopped (interrupted, or gone without an end), so a script can wait with
+A run with no `end` event is `queued` while it waits for its turn, `starting`
+once it has it and has not yet begun its steps, `running` after that, as long
+as its process lives, and `stopped` once it is gone (also when it was
+interrupted while queued, or refused with `--no-wait`). Exit status: 0 passed,
+1 failed, 2 no run recorded, 3 queued, starting or running, 4 stopped
+(interrupted, or gone without an end), so a script can wait with
 `while ci-local --status >/dev/null; [ $? -eq 3 ]; do sleep 10; done`.
+
+### One run at a time: the queue
+
+Several runs at once (an agent in each of three repositories, say) freeze
+Docker, and the virtual machine behind it on a Mac. So every run of every
+project on the machine takes its turn, first come first served, and a run
+that finds the machine busy waits:
+
+```text
+Waiting for other-ci (pid 48213) · 1 ahead
+...
+Queue: your turn after 4m12s
+ci-local 0.4.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+```
+
+The line is printed again only when whom the run waits for, or how many are
+ahead, changes. The run records the same in a `queued` event, so `--status`
+shows it (`⏳ queued · behind other-ci`) from the first moment, and nothing
+touches Docker, the runner or the development stack until the turn comes.
+The `total` of the summary counts from the turn, not from the wait.
+
+- **`--no-wait`**: when the machine is busy, print
+  `ci-local: the machine is busy: <project> (pid <pid>)` on stderr and exit
+  with status **3**, without waiting.
+- **Ctrl-C or `kill` while waiting** removes the run from the queue and exits
+  130 or 143, with no summary and no cleanup: the runner of that project may
+  be the one in use by the run ahead.
+- **`CI_LOCAL_QUEUE=off`** (also `0`, `false`, `no`) lets runs overlap, as
+  before. It still records one `queued` event, so `--status` has no gap.
+- **`--list`, `--print-plan`, `--down`, `--status`, `--help`, `--version`** do
+  not queue.
+
+How it works, for the curious or for a stuck queue: the directory
+`CI_LOCAL_QUEUE_DIR` (default `~/.cache/ci-local/queue`, readable by you
+alone; the `XDG_CACHE_HOME` and `TMPDIR` fallbacks are those of the events
+file, and a path you set must be absolute) holds one ticket file per run,
+named by the time it came and its pid, and a `lock` directory made by the run
+whose turn it is (`lock/pid` names it). A run goes ahead when its ticket is
+the first one of a live process and it makes the lock. Tickets and locks of
+processes that are gone (killed, a crash, a reboot) are ignored and removed,
+and a lock with no pid, which a crash between its two steps would leave, is
+stale after 10 seconds; a lock whose process is alive is never removed. The
+queue is polled every 2 seconds (`CI_LOCAL_QUEUE_POLL`, in seconds). If the
+directory cannot be made, the run says so and goes on without waiting.
 
 ## The parity test
 

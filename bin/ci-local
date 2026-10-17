@@ -463,17 +463,25 @@ Options:
                   them to ~/.cache/ci-local/<project>.ndjson (under
                   XDG_CACHE_HOME when set); CI_LOCAL_EVENTS=off writes none.
                   --list, --print-plan and --down ignore both.
-  --status        Print the state of the last run (running, passed, failed,
-                  stopped) as a short Markdown block, from its events file
-                  (the default one, or --events FILE), and exit: 0 passed,
-                  1 failed, 2 no run recorded, 3 running, 4 stopped.
+  --no-wait       Do not wait for another ci-local run to finish: when the
+                  machine is busy, say which run holds it and exit with
+                  status 3. Runs of every project on this machine take turns,
+                  first come first served, so Docker has one at a time.
+                  CI_LOCAL_QUEUE=off lets runs overlap; the queue lives in
+                  CI_LOCAL_QUEUE_DIR (default ~/.cache/ci-local/queue).
+                  --list, --print-plan, --down and --status do not queue.
+  --status        Print the state of the last run (queued, starting, running,
+                  passed, failed, stopped) as a short Markdown block, from
+                  its events file (the default one, or --events FILE), and
+                  exit: 0 passed, 1 failed, 2 no run recorded, 3 queued,
+                  starting or running, 4 stopped.
   --list          Print the steps that would run, and exit.
   --print-plan    Print the whole plan as JSON (for parity checks), and exit.
   --version       Print the version, and exit.
   -h, --help      This text.
 
 Exit status: 0 when every step passed, 1 on the first failing step (named in
-the summary), 2 on a usage or configuration error.
+the summary), 2 on a usage or configuration error, 3 busy with --no-wait.
 USAGE
 }
 
@@ -488,8 +496,14 @@ LIST_ONLY=0
 PRINT_PLAN=0
 HELP=0
 STATUS=0
+NO_WAIT=0
 QUIET=0
 case "${CI_LOCAL_QUIET:-}" in '' | 0 | false) ;; *) QUIET=1 ;; esac
+# The queue every real run takes its turn in; CI_LOCAL_QUEUE=off lets runs overlap.
+QUEUE=1
+case "${CI_LOCAL_QUEUE:-}" in 0 | off | false | no) QUEUE=0 ;; esac
+QUEUE_POLL="${CI_LOCAL_QUEUE_POLL:-2}" # seconds between two looks at the queue
+[[ "$QUEUE_POLL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || QUEUE_POLL=2
 EVENTS="${CI_LOCAL_EVENTS:-}"
 # Without --events a run writes to the default file (see DEFAULT_EVENTS);
 # CI_LOCAL_EVENTS=off writes none.
@@ -523,6 +537,7 @@ while [[ $# -gt 0 ]]; do
     --quiet) QUIET=1; RUN_OPTIONS_GIVEN+=" --quiet"; shift ;;
     --events) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die_usage "--events needs a file name"; EVENTS=$2; EVENTS_OFF=0; RUN_OPTIONS_GIVEN+=" --events"; shift 2 ;;
     --events=*) EVENTS=${1#--events=}; [[ -n "$EVENTS" ]] || die_usage "--events needs a file name"; EVENTS_OFF=0; RUN_OPTIONS_GIVEN+=" --events"; shift ;;
+    --no-wait) NO_WAIT=1; shift ;;
     --status) STATUS=1; shift ;;
     --version) echo "ci-local $CI_LOCAL_VERSION"; exit 0 ;;
     -h | --help) HELP=1; shift ;;
@@ -540,7 +555,7 @@ show_status() {
 }
 
 if [[ $STATUS -eq 1 && $HELP -eq 0 ]]; then
-  [[ -z "$ONLY$SKIP" && $KEEP$DOWN_ONLY$REBUILD$LIST_ONLY$PRINT_PLAN == 00000 && "$RUN_OPTIONS_GIVEN" != *--quiet* ]] ||
+  [[ -z "$ONLY$SKIP" && $KEEP$DOWN_ONLY$REBUILD$LIST_ONLY$PRINT_PLAN$NO_WAIT == 000000 && "$RUN_OPTIONS_GIVEN" != *--quiet* ]] ||
     die_usage "--status takes only --events"
   # An events file named on the command line or in the environment needs no
   # config: --status reads it from anywhere.
@@ -568,9 +583,33 @@ done < <(declare -F)
 
 [[ "$CI_PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
   { echo "ci-local: CI_PROJECT must be a lowercase name, got '$CI_PROJECT'" >&2; exit 2; }
+# The user's own cache: XDG_CACHE_HOME, else ~/.cache, else (neither set, as
+# under a bare service) a directory of this user's under TMPDIR.
+CACHE_BASE=""
+CACHE_BASE_PRIVATE=0
+if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+  CACHE_BASE=$XDG_CACHE_HOME
+elif [[ -n "${HOME:-}" ]]; then
+  CACHE_BASE="$HOME/.cache"
+else
+  CACHE_BASE="${TMPDIR:-/tmp}"
+  CACHE_BASE="${CACHE_BASE%/}/ci-local-$(id -u)"
+  CACHE_BASE_PRIVATE=1
+fi
+CI_CACHE_DIR="$CACHE_BASE/ci-local"
 # Where a run writes its events without --events, and --status reads them:
 # outside the checkout, in the user's own cache.
-DEFAULT_EVENTS="${XDG_CACHE_HOME:-$HOME/.cache}/ci-local/$CI_PROJECT.ndjson"
+DEFAULT_EVENTS="$CI_CACHE_DIR/$CI_PROJECT.ndjson"
+
+# Makes ci-local's directory in the cache, readable by its user alone (the
+# directories above it, when they are the TMPDIR fallback's, too).
+make_cache_dir() {
+  [[ -d "$CI_CACHE_DIR" ]] && return 0
+  if [[ $CACHE_BASE_PRIVATE -eq 1 && ! -d "$CACHE_BASE" ]]; then
+    mkdir -p "$CACHE_BASE" && chmod 700 "$CACHE_BASE" || return 1
+  fi
+  mkdir -p "$CI_CACHE_DIR" && chmod 700 "$CI_CACHE_DIR"
+}
 [[ $STATUS -eq 0 ]] || show_status "$DEFAULT_EVENTS"
 [[ ${#CI_JOBS[@]} -gt 0 ]] || { echo "ci-local: CI_JOBS is empty" >&2; exit 2; }
 [[ "$(type -t ci_plan)" == function ]] || { echo "ci-local: the config defines no ci_plan function" >&2; exit 2; }
@@ -651,7 +690,7 @@ DURATIONS=()
 FAILED_STEP=""
 SUMMARY_PRINTED=0
 PLAN_STARTED=0
-STARTED=$SECONDS
+STARTED=$SECONDS # reset when the run's turn comes: the total does not count the wait
 DEV_BEFORE=""
 CHECKOUT=""
 LOG_DIR=""
@@ -759,6 +798,226 @@ run_plan() {
   done
 }
 
+# ------------------------------------------------------------------ queue
+#
+# One run at a time on the machine, whatever the project: Docker (and the
+# VM behind it on a Mac) does not take several of these at once. A run takes
+# a ticket, named by the time it came, and goes ahead when its ticket is the
+# first of a live process AND it wins the lock directory.
+#
+#   QUEUE_DIR/<epoch-ms>-<pid>   one ticket per run, with project=, pid=, repo=
+#   QUEUE_DIR/lock/              made with mkdir (atomic) by the run in turn;
+#                                lock/pid names it, lock/project says whose
+
+QUEUE_DIR=""
+MY_NAME=""
+MY_TICKET=""
+HAVE_LOCK=0
+SLEEPER=""
+AHEAD=0          # live tickets before ours
+FIRST_TICKET=""  # the first of them
+BLOCK_PROJECT="" # who we wait for ("" when nobody)
+BLOCK_PID=""
+
+# True when a process with this pid exists (ours or not: kill says EPERM for
+# another user's, ps still lists it).
+pid_alive() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1
+}
+
+# ticket_value FILE KEY: what follows `KEY=` in the file; nothing when absent.
+ticket_value() {
+  local line
+  [[ -r "$1" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$2="* ]]; then
+      printf '%s' "${line#"$2="}"
+      return 0
+    fi
+  done 2>/dev/null <"$1" || true
+}
+
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true; }
+
+# The queue directory, made; false when it cannot be (or is not absolute).
+queue_setup() {
+  if [[ -n "${CI_LOCAL_QUEUE_DIR:-}" ]]; then
+    QUEUE_DIR=$CI_LOCAL_QUEUE_DIR
+  else
+    QUEUE_DIR="$CI_CACHE_DIR/queue"
+    make_cache_dir 2>/dev/null || return 1
+    [[ -d "$QUEUE_DIR" ]] || { mkdir "$QUEUE_DIR" 2>/dev/null && chmod 700 "$QUEUE_DIR"; } || return 1
+  fi
+  [[ "$QUEUE_DIR" == /* ]] && mkdir -p "$QUEUE_DIR" 2>/dev/null && [[ -w "$QUEUE_DIR" ]]
+}
+
+# Our ticket, complete or absent: written aside, then moved into place.
+write_ticket() {
+  local tmp="$QUEUE_DIR/.ticket.$$"
+  printf 'project=%s\npid=%s\nrepo=%s\n' "$CI_PROJECT" "$$" "$REPO" >"$tmp" && mv "$tmp" "$MY_TICKET"
+}
+
+# Counts the live tickets before ours into AHEAD (FIRST_TICKET is the first)
+# and removes those of dead processes. False when ours is not there.
+queue_scan() {
+  local f name pid
+  AHEAD=0
+  FIRST_TICKET=""
+  for f in "$QUEUE_DIR"/[0-9]*-[0-9]*; do
+    [[ -f "$f" ]] || continue
+    name=${f##*/}
+    [[ "$name" =~ ^[0-9]{15}-[0-9]{10}$ ]] || continue
+    [[ "$name" != "$MY_NAME" ]] || return 0
+    pid=$((10#${name##*-}))
+    if pid_alive "$pid"; then
+      AHEAD=$((AHEAD + 1))
+      [[ -n "$FIRST_TICKET" ]] || FIRST_TICKET=$f
+    else
+      rm -f "$f"
+    fi
+  done
+  return 1
+}
+
+# Takes the lock when it is free or its holder is gone; else false, with
+# BLOCK_PROJECT and BLOCK_PID naming the holder. A live holder's lock is
+# never removed. A lock with no pid yet is a run between mkdir and its
+# write: held, until it is older than 10 seconds.
+queue_lock() {
+  local lock="$QUEUE_DIR/lock" holder mtime
+  for _ in 1 2; do
+    if mkdir "$lock" 2>/dev/null; then
+      HAVE_LOCK=1
+      printf '%s' "$CI_PROJECT" >"$lock/project"
+      printf '%s\n' "$$" >"$lock/pid"
+      return 0
+    fi
+    BLOCK_PROJECT="$(cat "$lock/project" 2>/dev/null || true)"
+    [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
+    holder=""
+    [[ ! -f "$lock/pid" ]] || read -r holder <"$lock/pid" 2>/dev/null || true
+    if [[ "$holder" =~ ^[0-9]+$ ]]; then
+      holder=$((10#$holder))
+      if pid_alive "$holder"; then
+        BLOCK_PID=$holder
+        return 1
+      fi
+    else
+      BLOCK_PID=""
+      mtime="$(file_mtime "$lock")"
+      [[ "$mtime" =~ ^[0-9]+$ && $(($(date +%s) - mtime)) -gt 10 ]] || return 1
+    fi
+    # Stale: moved away whole (a half-removed lock must not be seen), then removed.
+    mv "$lock" "$QUEUE_DIR/.stale.$$" 2>/dev/null && rm -rf "$QUEUE_DIR/.stale.$$"
+  done
+  return 1
+}
+
+# One look at the queue: true with the lock taken. Otherwise AHEAD,
+# BLOCK_PROJECT and BLOCK_PID say what we wait for: the first live ticket
+# before ours, else the holder of the lock.
+queue_poll() {
+  local name
+  BLOCK_PROJECT=""
+  BLOCK_PID=""
+  queue_scan || { write_ticket && queue_scan || true; }
+  if [[ $AHEAD -gt 0 ]]; then
+    name=${FIRST_TICKET##*/}
+    BLOCK_PID=$((10#${name##*-}))
+    BLOCK_PROJECT="$(ticket_value "$FIRST_TICKET" project)"
+    [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
+    return 1
+  fi
+  queue_lock || return 1
+  BLOCK_PROJECT=""
+  BLOCK_PID=""
+}
+
+# The lock (when ours: lock/pid is this process) and the ticket, given back.
+queue_release() {
+  local lock="$QUEUE_DIR/lock" holder=""
+  if [[ $HAVE_LOCK -eq 1 ]]; then
+    read -r holder <"$lock/pid" 2>/dev/null || true
+    if [[ "$holder" == "$$" ]]; then
+      mv "$lock" "$QUEUE_DIR/.released.$$" 2>/dev/null && rm -rf "$QUEUE_DIR/.released.$$"
+    fi
+    HAVE_LOCK=0
+  fi
+  [[ -z "$MY_TICKET" ]] || rm -f "$MY_TICKET"
+  MY_TICKET=""
+}
+
+# The exit of a run that never had its turn (an interrupt, --no-wait): its
+# ticket goes, and nothing else: no teardown, for another run of this project
+# may hold the lock and its runner is that run's.
+queue_leave() {
+  local status=$?
+  trap - EXIT INT TERM
+  set +e
+  [[ -z "$SLEEPER" ]] || kill "$SLEEPER" 2>/dev/null
+  queue_release
+  [[ -z "$LOG_DIR" ]] || rmdir "$LOG_DIR" 2>/dev/null
+  exit "$status"
+}
+
+# The queued event: where we stand in the queue, now.
+emit_queued() {
+  local by=null
+  [[ -z "$BLOCK_PROJECT" ]] ||
+    by="{\"project\":$(json_string "$BLOCK_PROJECT"),\"pid\":${BLOCK_PID:-null}}"
+  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"ahead\":$AHEAD,\"blockedBy\":$by"
+}
+
+# Waits for the turn, and takes the lock. Prints what it waits for when that
+# changes; with --no-wait, a busy machine is status 3.
+queue_wait() {
+  local key last="" began=$SECONDS waited=0 got
+  AHEAD=0
+  BLOCK_PROJECT=""
+  BLOCK_PID=""
+  if [[ $QUEUE -eq 1 ]] && ! queue_setup; then
+    echo "ci-local: cannot use the queue directory $QUEUE_DIR: running without waiting" >&2
+    QUEUE=0
+  fi
+  if [[ $QUEUE -eq 0 ]]; then
+    emit_queued
+    return 0
+  fi
+  event_time
+  MY_NAME="$(printf '%015d-%010d' "${EV_MS:-0}" "$$")"
+  MY_TICKET="$QUEUE_DIR/$MY_NAME"
+  write_ticket
+  trap queue_leave EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  while :; do
+    got=0
+    queue_poll && got=1
+    key="$AHEAD|$BLOCK_PROJECT|$BLOCK_PID"
+    if [[ "$key" != "$last" ]]; then
+      last=$key
+      emit_queued
+      if [[ $got -eq 0 ]]; then
+        if [[ $NO_WAIT -eq 1 ]]; then
+          echo "ci-local: the machine is busy: $BLOCK_PROJECT (pid ${BLOCK_PID:-?})" >&2
+          exit 3
+        fi
+        echo "Waiting for $BLOCK_PROJECT (pid ${BLOCK_PID:-?}) · $AHEAD ahead"
+        waited=1
+      fi
+    fi
+    [[ $got -eq 0 ]] || break
+    # In the background and waited for: a signal is handled at once.
+    sleep "$QUEUE_POLL" &
+    SLEEPER=$!
+    wait "$SLEEPER" || true
+    SLEEPER=""
+  done
+  [[ $waited -eq 0 ]] || echo "Queue: your turn after $(fmt_duration $((SECONDS - began)))"
+  return 0
+}
+
 finish() {
   local status=$?
   trap - EXIT INT TERM
@@ -814,6 +1073,8 @@ finish() {
     fi
     emit_event "$RUN_MS" "\"event\":\"end\",\"result\":\"$result\",\"devStack\":\"$dev_stack\""
   fi
+  # Last: the next run's turn comes when the teardown and the end event are done.
+  queue_release
   exit "$status"
 }
 
@@ -821,7 +1082,7 @@ if [[ -n "$EVENTS" ]]; then
   : 2>/dev/null >"$EVENTS" || { echo "ci-local: cannot write the --events file $EVENTS" >&2; exit 2; }
 elif [[ $EVENTS_OFF -eq 0 ]]; then
   # The default file is a convenience for --status: never a reason to stop.
-  if mkdir -p "${DEFAULT_EVENTS%/*}" 2>/dev/null && : 2>/dev/null >"$DEFAULT_EVENTS"; then
+  if make_cache_dir 2>/dev/null && : 2>/dev/null >"$DEFAULT_EVENTS"; then
     EVENTS=$DEFAULT_EVENTS
   else
     echo "ci-local: cannot write the events file $DEFAULT_EVENTS: --status will not see this run" >&2
@@ -831,6 +1092,18 @@ if [[ $QUIET -eq 1 ]]; then
   tmp="${TMPDIR:-/tmp}"
   LOG_DIR="$(mktemp -d "${tmp%/}/$CI_PROJECT-logs.XXXXXX")"
 fi
+
+# The commit the steps see; null outside a git checkout.
+RUN_COMMIT=null
+if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  RUN_COMMIT="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null)" && RUN_COMMIT="$(json_string "$RUN_COMMIT")" || RUN_COMMIT=null
+fi
+RUN_LOG_DIR=null
+[[ -z "$LOG_DIR" ]] || RUN_LOG_DIR="$(json_string "$LOG_DIR")"
+# Queued from here: --status shows the run at once, and until its turn comes
+# nothing touches Docker.
+queue_wait
+STARTED=$SECONDS
 
 # The terminal, for finish (see there).
 exec 3>&1 4>&2
@@ -856,13 +1129,6 @@ fi
 teardown
 PLAN_STARTED=1
 # RUN_MS: the run event's time, from which the end event's durationMs counts.
-# The commit the steps see; null outside a git checkout.
-RUN_COMMIT=null
-if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  RUN_COMMIT="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null)" && RUN_COMMIT="$(json_string "$RUN_COMMIT")" || RUN_COMMIT=null
-fi
-RUN_LOG_DIR=null
-[[ -z "$LOG_DIR" ]] || RUN_LOG_DIR="$(json_string "$LOG_DIR")"
 # pid: --status tells a run still going from one killed before its end event.
 emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR"
 RUN_MS=${EV_MS:-}
