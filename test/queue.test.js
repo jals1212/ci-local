@@ -597,7 +597,7 @@ test('a claim left by a dead run (older than 10 seconds) is broken', async () =>
   assert.equal(defaultEvents(cache, 'claim-ci').at(-1).result, 'passed')
 })
 
-test('an events file whose directory takes no .claim: the run says so at once and goes on without events', async () => {
+test('an events file whose directory takes no .claim: the run writes it without a claim, as before 0.4.0', async () => {
   const dir = project('claim-ci', [WORK])
   const locked = scratch('locked-')
   const file = join(locked, 'events.ndjson')
@@ -608,6 +608,29 @@ test('an events file whose directory takes no .claim: the run says so at once an
     const { status, err } = await start(['--events', file], { cwd: dir, queue: scratch('queue-') }).done
     assert.equal(status, 0, err)
     assert.ok(Date.now() - started < 4000, `took ${Date.now() - started}ms: no 10-second wait for a claim that cannot be made`)
+    const events = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    assert.equal(events[0].event, 'queued')
+    assert.equal(events.at(-1).result, 'passed')
+    assert.equal(existsSync(join(dir, 'ran')), true)
+  } finally {
+    chmodSync(locked, 0o755)
+  }
+})
+
+test('a stale claim that cannot be removed does not spin: the run gives it up at once', async () => {
+  const dir = project('claim-ci', [WORK])
+  const locked = scratch('locked-')
+  const file = join(locked, 'events.ndjson')
+  writeFileSync(file, '')
+  mkdirSync(`${file}.claim`)
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.claim`, old, old)
+  chmodSync(locked, 0o555) // the stale claim can be neither moved nor removed
+  try {
+    const started = Date.now()
+    const { status, err } = await start(['--events', file], { cwd: dir, queue: scratch('queue-') }).done
+    assert.equal(status, 0, err)
+    assert.ok(Date.now() - started < 4000, `took ${Date.now() - started}ms`)
     assert.match(err, /ci-local: cannot claim the events file .*events\.ndjson: this run writes no events\n/)
     assert.equal(existsSync(join(dir, 'ran')), true)
   } finally {

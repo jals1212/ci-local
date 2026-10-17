@@ -181,7 +181,9 @@ start together cannot both take it. A second run of a project waits in the
 queue without writing events and takes the file at its turn, when the first
 run is over; with `CI_LOCAL_QUEUE=off` it writes no events at all and says
 so. A `.claim` directory older than 10 seconds is a crashed run's and is
-removed.
+removed; one that cannot be removed makes the run write no events, and say
+so. Where no claim can be made at all (a writable `--events` file in a
+directory you cannot write), the file is taken without one, as before 0.4.0.
 
 Put the file outside the checkout (inside, it is an uncommitted change in the
 summary) and in a directory only you can write: emptying a fixed name in a

@@ -49,8 +49,10 @@ their `release x.y.z:` commit messages.
   queues nor writes events, and `--status` exits 2. Its `ci-local`
   directory is checked the same way once it exists, so one planted after
   the first check is caught before anything is written in it.
-- A `<file>.claim` that cannot be made at all (an `--events` file in a
-  directory the user cannot write) is given up at once, without waiting.
+- Where no `<file>.claim` can be made at all (a writable `--events` file in
+  a directory the user cannot write), the file is taken without a claim, as
+  before 0.4.0. A stale claim that cannot be removed is given up at once
+  (the run writes no events and says so) instead of being retried forever.
 - The Pi extension takes a relative `CI_LOCAL_EVENTS` from the repository
   root, and follows nothing when the `TMPDIR` fallback cache is refused.
 - README: where to install (the CLI in each repository, the Pi package once),

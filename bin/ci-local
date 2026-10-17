@@ -1134,20 +1134,26 @@ RUN_LOG_DIR=null
 # empties it and writes the first queued event, all under FILE.claim (an
 # atomic mkdir), so two runs starting together cannot both take it. False
 # when a live run owns it (OWNER names it) or the claim cannot be had
-# (OWNER empty). A claim older than 10 seconds is a dead run's: broken.
+# (OWNER empty). A claim older than 10 seconds is a dead run's: broken; one
+# that cannot be removed is given up. Where no claim can be made at all (a
+# directory the user cannot write, with a writable file in it), the file is
+# taken without one, as before 0.4.0.
 claim_events() {
-  local claim="$1.claim" mtime tries=0
+  local claim="$1.claim" mtime tries=0 held=1
   OWNER=""
   until mkdir "$claim" 2>/dev/null; do
     if [[ ! -e "$claim" ]]; then
-      # Released between the two looks, or it cannot be made at all (a
-      # directory this user cannot write): one more try, then give up now.
+      # Released between the two looks, or it cannot be made at all.
       mkdir "$claim" 2>/dev/null && break
-      [[ -e "$claim" ]] || return 1
+      if [[ ! -e "$claim" ]]; then
+        held=0
+        break
+      fi
     fi
     mtime="$(file_mtime "$claim")"
     if [[ "$mtime" =~ ^[0-9]+$ && $(($(date +%s) - mtime)) -gt 10 ]]; then
-      mv "$claim" "$claim.stale.$$" 2>/dev/null && rm -rf "$claim.stale.$$"
+      mv "$claim" "$claim.stale.$$" 2>/dev/null || return 1
+      rm -rf "$claim.stale.$$"
       continue
     fi
     tries=$((tries + 1))
@@ -1160,7 +1166,8 @@ claim_events() {
     EVENTS=$1
     emit_queued
   fi
-  rmdir "$claim" 2>/dev/null
+  # Only a claim this run made: without one, another run's may be there now.
+  [[ $held -eq 0 ]] || rmdir "$claim" 2>/dev/null
   [[ -z "$OWNER" ]]
 }
 
