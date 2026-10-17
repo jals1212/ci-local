@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# A stand-in for the docker CLI, for the tests that run a plan without a
+# daemon. `exec` runs the command here, in the --workdir, with the --env
+# variables; listing commands find nothing; everything else succeeds silently.
+# With FAKE_DOCKER_PIDS, `exec` records its pid there and `rm` kills them, as
+# removing the runner ends its steps.
+set -euo pipefail
+case "${1:-}" in
+  version) echo "0.0.0-fake" ;;
+  exec)
+    shift
+    workdir=.
+    while [[ $# -gt 0 && "$1" == --* ]]; do
+      case "$1" in
+        --workdir) workdir=$2; shift 2 ;;
+        --env) export "${2?}"; shift 2 ;;
+        --user) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    shift # the container
+    cd "$workdir"
+    [[ -z "${FAKE_DOCKER_PIDS:-}" ]] || echo $$ >>"$FAKE_DOCKER_PIDS"
+    exec "$@"
+    ;;
+  rm)
+    if [[ -n "${FAKE_DOCKER_PIDS:-}" && -f "$FAKE_DOCKER_PIDS" ]]; then
+      while read -r pid; do pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true; done <"$FAKE_DOCKER_PIDS"
+    fi
+    ;;
+  *) ;;
+esac
