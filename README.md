@@ -281,6 +281,36 @@ stale after 10 seconds; a lock whose process is alive is never removed. The
 queue is polled every 2 seconds (`CI_LOCAL_QUEUE_POLL`, in seconds). If the
 directory cannot be made, the run says so and goes on without waiting.
 
+## In Pi: footer, end card and agent skill
+
+The package is also a [Pi](https://pi.dev) package. Install it once, for every
+repository:
+
+```sh
+pi install npm:@jals1212/ci-local
+```
+
+In a session opened inside a repository with `ci-local.config.sh` (with a
+literal `CI_PROJECT=`), it follows the events file of that project; it never
+runs ci-local or Docker itself:
+
+- **Footer**: `⏳ ci-local queued · behind erp-ci`, `🐳 ci-local [3/8] lint · 2m05s`,
+  then `✅ ci-local passed · 4m12s` or `❌ ci-local failed at lint · 2m10s` until
+  the next run.
+- **When a run the session saw in flight ends**: a notification, and a card in
+  the transcript with the `--status` block. The card reaches the agent: as a
+  follow-up when it is busy (it reacts to the result), or in the context of
+  your next message when it is idle (no turn is spent). A run already over
+  when the session starts is not announced.
+- **Tool `ci_local_status`**: the same three lines for the agent, without a
+  shell.
+- **Skill `ci-local`**: how an agent runs and waits for ci-local (in the
+  background, `--quiet`, never two runs, read only the failing step's log).
+  Branch and merge policy stay the project's.
+
+Outside Pi nothing changes: the extension, the skill and the optional Pi peer
+dependencies are not used by `npx ci-local`.
+
 ## The parity test
 
 With any test runner:
