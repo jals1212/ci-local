@@ -286,7 +286,9 @@ killed run whose pid the system gave to another process shows as `stopped`,
 not as still going. The queue's tickets and lock, and the claim of the events
 file by the next run, tell the same way. Start times are read with
 `ps -o lstart=`, which macOS and Linux both have, in the C locale and UTC so
-that every process reads the same text; it has a resolution of one second.
+that every process reads the same text; it has a resolution of one second, and
+two start times at most 3 seconds apart are the same one (the clock may be
+stepped between two readings). A pid of 0 or 1 is never a run.
 Events from before 0.6.0 have no `pidStart`: for those the pid alone decides,
 and a reused pid still looks alive. If `ps` cannot say a process's start now,
 the pid alone decides too.

@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { alive, pidStart } from '../status.js'
+import { alive, createPidStartReader, pidStart } from '../status.js'
 
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
@@ -368,6 +368,51 @@ const startOf = (pid) =>
   spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout
     .trim()
     .replace(/\s+/g, ' ')
+
+/** A start time text moved by `seconds`, in the same form (as an NTP step would make `ps` say). */
+function shifted(start, seconds) {
+  const [, mon, day, time, year] = start.match(/^\w{3} (\w{3}) +(\d+) (\d\d:\d\d:\d\d) (\d{4})$/)
+  const at = new Date(Date.parse(`${day} ${mon} ${year} ${time} UTC`) + seconds * 1000)
+  const [weekday, , month, , clock] = at.toUTCString().split(' ')
+  return `${weekday.slice(0, 3)} ${month} ${at.getUTCDate()} ${clock} ${at.getUTCFullYear()}`
+}
+
+test('alive: a start time 2 s off the real one is the same process (the clock was adjusted); 10 s off is another', () => {
+  const start = startOf(process.pid)
+  for (const seconds of [2, -2, 3, -3]) assert.equal(alive(process.pid, shifted(start, seconds)), true, `${seconds} s`)
+  for (const seconds of [10, -10, 4, -4]) assert.equal(alive(process.pid, shifted(start, seconds)), false, `${seconds} s`)
+  assert.equal(alive(process.pid, 'not a date'), false, 'text that is no date: equal or gone')
+})
+
+test('alive and pidStart: pid 0 and 1 are nobody’s (kill 0 reaches the whole group)', () => {
+  assert.equal(alive(0), false)
+  assert.equal(alive(1), false)
+  assert.equal(alive(0, startOf(process.pid)), false)
+  assert.equal(pidStart(0), null)
+  assert.equal(pidStart(1), null)
+})
+
+test('createPidStartReader: asks ps once per pid within the lifetime, again after it, and never keeps a failure', () => {
+  let clock = 1000
+  let calls = 0
+  let out = { status: 0, stdout: 'Mon Jan  1 00:00:00 2001\n' }
+  const read = createPidStartReader({ spawn: () => (calls++, out), now: () => clock, ttl: 5000 })
+  assert.equal(read(42), 'Mon Jan 1 00:00:00 2001')
+  assert.equal(read(42), 'Mon Jan 1 00:00:00 2001')
+  assert.equal(calls, 1)
+  assert.equal(read(43), 'Mon Jan 1 00:00:00 2001')
+  assert.equal(calls, 2, 'another pid')
+  clock += 5001
+  read(42)
+  assert.equal(calls, 3, 'after the lifetime')
+  out = { status: 1, stdout: '' }
+  clock += 5001
+  assert.equal(read(42), null)
+  assert.equal(read(42), null)
+  assert.equal(calls, 5, 'a failure is asked again each time')
+  out = { status: 0, stdout: 'Tue Jan  2 00:00:00 2001\n' }
+  assert.equal(read(42), 'Tue Jan 2 00:00:00 2001')
+})
 
 test('pidStart: the start time of a live process, the same for every ci-local (locale and time zone do not change it); none for a gone one', () => {
   const start = startOf(process.pid)

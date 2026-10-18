@@ -46,41 +46,87 @@ function firstOfQueuedSeries(events, index) {
   return first
 }
 
+/** How far apart two readings of one process's start time may be, in seconds (see `bin/ci-local`). */
+export const PID_START_TOLERANCE = 3
+
+/** How long a start time read from ps is kept, in milliseconds: one tick of the Pi extension asks every second. */
+const PID_START_LIFETIME = 5000
+
+/** A pid that can be a run: 0 is the process group for `kill`, and 1 is init. */
+const isRunPid = (pid) => Number.isInteger(pid) && pid > 1
+
 /**
- * The start time of a process, as `bin/ci-local` records it next to the pid
- * (its `pid_start`, which must give the same string): `ps -o lstart=` reads on
- * macOS and on Linux alike, where /proc exists only on Linux. Its text depends
- * on the locale and the time zone, so both are fixed here, and whitespace is
- * squeezed (a one-digit day is padded). Null when the process is gone or ps
- * cannot say.
+ * A reader of the start time of a process, as `bin/ci-local` records it next
+ * to the pid (its `pid_start`, which must give the same string): `ps -o
+ * lstart=` reads on macOS and on Linux alike, where /proc exists only on
+ * Linux. Its text depends on the locale and the time zone, so both are fixed
+ * here, and whitespace is squeezed (a one-digit day is padded). Null when the
+ * process is gone or ps cannot say. A start time is kept for `ttl`
+ * milliseconds, so a status line asked every second does not spawn ps every
+ * second; a null is never kept, so a ps that failed once is asked again.
+ * `spawn` and `now` are for tests.
  */
-export function pidStart(pid) {
-  if (!Number.isInteger(pid)) return null
-  const out = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
-    encoding: 'utf8',
-    env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
-  })
-  const start = out.error || out.status !== 0 ? '' : out.stdout.trim().replace(/\s+/g, ' ')
-  return start || null
+export function createPidStartReader({ spawn = spawnSync, now = Date.now, ttl = PID_START_LIFETIME } = {}) {
+  const kept = new Map() // pid -> { start, at }
+  return (pid) => {
+    if (!isRunPid(pid)) return null
+    const hit = kept.get(pid)
+    if (hit && now() - hit.at < ttl) return hit.start
+    kept.delete(pid)
+    const out = spawn('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
+    })
+    const start = out.error || out.status !== 0 ? '' : out.stdout.trim().replace(/\s+/g, ' ')
+    if (!start) return null
+    kept.set(pid, { start, at: now() })
+    return start
+  }
+}
+
+/** The start time of a process (see `createPidStartReader`). */
+export const pidStart = createPidStartReader()
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** Milliseconds since the epoch of a start time text (UTC, as `pidStart` gives it); null when it is not one. */
+function instantOf(text) {
+  const match = /^\w{3} (\w{3}) +(\d+) (\d+):(\d+):(\d+) (\d{4})$/.exec(text)
+  const month = match ? MONTHS.indexOf(match[1]) : -1
+  if (month === -1) return null
+  const [day, hour, minute, second, year] = match.slice(2).map(Number)
+  return Date.UTC(year, month, day, hour, minute, second)
+}
+
+/**
+ * True when two start time texts are the same instant, give or take
+ * PID_START_TOLERANCE: the clock may be stepped (NTP) between two readings of
+ * a live process. Text that is not a date is compared as it is.
+ */
+export function sameStart(a, b) {
+  if (a === b) return true
+  const [x, y] = [instantOf(a), instantOf(b)]
+  return x !== null && y !== null && Math.abs(x - y) <= PID_START_TOLERANCE * 1000
 }
 
 /**
  * True when a process with this pid exists (ours or not) and, when `start` (the
- * start time the run recorded) is given, started then: a pid that started at
- * another time was given to another process after the run it names was gone.
- * Without `start` (an event from before 0.6.0), or when ps cannot tell the
- * start now, the pid alone decides.
+ * start time the run recorded) is given, started then (within the tolerance):
+ * a pid that started at another time was given to another process after the
+ * run it names was gone. Without `start` (an event from before 0.6.0), or when
+ * ps cannot tell the start now, the pid alone decides. Pids 0 and 1 are
+ * nobody's run. `read` is for tests.
  */
-export function alive(pid, start) {
-  if (!Number.isInteger(pid)) return false
+export function alive(pid, start, read = pidStart) {
+  if (!isRunPid(pid)) return false
   try {
     process.kill(pid, 0)
   } catch (error) {
     if (error.code !== 'EPERM') return false
   }
   if (typeof start !== 'string' || !start) return true
-  const now = pidStart(pid)
-  return now === null || now === start
+  const now = read(pid)
+  return now === null || sameStart(start, now)
 }
 
 /**

@@ -908,18 +908,42 @@ pid_start() {
   [[ ${#parts[@]} -eq 0 ]] || echo "${parts[*]}"
 }
 
+# How far apart two readings of one process's start time may be, in seconds.
+# The wall clock can be stepped (NTP) between the run's reading and ours, and
+# ps then says a second or so off for a live process; a pid given to another
+# process starts after the run died, normally much later.
+PID_START_TOLERANCE=3
+
+# same_start RECORDED NOW: true when the two start times (the text pid_start
+# gives) are the same instant, give or take PID_START_TOLERANCE. The text is
+# parsed by perl (as event_time does; Time::Local is a core module). Text that
+# perl cannot parse, or no perl, leaves the exact string comparison.
+same_start() {
+  [[ "$1" != "$2" ]] || return 0
+  perl -MTime::Local=timegm -e '
+    my %m; @m{qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)} = (0 .. 11);
+    my @t;
+    for (@ARGV[0, 1]) {
+      /^\w{3} (\w{3}) +(\d+) (\d+):(\d+):(\d+) (\d{4})$/ && exists $m{$1} or exit 1;
+      push @t, timegm($5, $4, $3, $2, $m{$1}, $6);
+    }
+    exit(abs($t[0] - $t[1]) <= $ARGV[2] ? 0 : 1)' "$1" "$2" "$PID_START_TOLERANCE" 2>/dev/null
+}
+
 # True when a process with this pid exists (ours or not: kill says EPERM for
 # another user's, ps still lists it) and, when START (its recorded start time)
-# is given, started then: a pid that started at another time was given to
-# another process after the run it names was gone. Without START, or when ps
-# cannot tell the start now, the pid alone decides, as before 0.6.0.
+# is given, started then (within PID_START_TOLERANCE): a pid that started at
+# another time was given to another process after the run it names was gone.
+# Without START, or when ps cannot tell the start now, the pid alone decides,
+# as before 0.6.0. Pids 0 and 1 are nobody's run: `kill -0 0` signals the
+# whole process group and always succeeds.
 pid_alive() {
   local now
-  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  [[ "$1" =~ ^[0-9]+$ ]] && ((10#$1 > 1)) || return 1
   kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1 || return 1
   [[ -n "${2:-}" ]] || return 0
   now="$(pid_start "$1")"
-  [[ -z "$now" || "$now" == "$2" ]]
+  [[ -z "$now" ]] || same_start "$2" "$now"
 }
 
 # ticket_value FILE KEY: what follows `KEY=` in the file; nothing when absent.

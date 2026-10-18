@@ -28,9 +28,14 @@ their `release x.y.z:` commit messages.
   (`pidStart`, from `ps -o lstart=` in the C locale and UTC) next to its pid,
   and a pid that started at another time counts as gone: `--status` and the
   Pi status line show the run as stopped, the next run takes over its events
-  file, and its ticket and lock are ignored. Events and tickets without a
-  start time (older runs) keep the pid-only check. `lock/pid` has the pid on
-  its first line, as before, and the start time on its second. (#3)
+  file, and its ticket and lock are ignored. Two start times count as the
+  same when they are at most 3 seconds apart, so a clock stepped by NTP does
+  not make a live run look gone. Pids 0 and 1 are never a run (`kill -0 0`
+  reaches the whole process group): they count as gone. `--status` and the Pi
+  status line keep a start time read from `ps` for 5 seconds instead of
+  asking every second. Events and tickets without a start time (older runs)
+  keep the pid-only check. `lock/pid` has the pid on its first line, as
+  before, and the start time on its second. (#3)
 
 ## 0.5.3
 

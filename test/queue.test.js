@@ -122,6 +122,14 @@ const startOf = (pid) =>
 // A start time no process has: the pid it goes with was given to another process.
 const WRONG_START = 'Mon Jan 1 00:00:00 2001'
 
+/** A start time text moved by `seconds`, in the same form (as an NTP step would make `ps` say). */
+function shifted(start, seconds) {
+  const [, mon, day, time, year] = start.match(/^\w{3} (\w{3}) +(\d+) (\d\d:\d\d:\d\d) (\d{4})$/)
+  const at = new Date(Date.parse(`${day} ${mon} ${year} ${time} UTC`) + seconds * 1000)
+  const [weekday, , month, , clock] = at.toUTCString().split(' ')
+  return `${weekday.slice(0, 3)} ${month} ${at.getUTCDate()} ${clock} ${at.getUTCFullYear()}`
+}
+
 /** A ticket as a run would have left it. */
 function plantTicket(queue, pid, { ms = 1, name = 'ghost', pidStart } = {}) {
   mkdirSync(queue, { recursive: true })
@@ -786,6 +794,78 @@ for (const [name, queueEnv] of [
     const kept = await start([], { cwd: dir, queue: scratch(), env: { ...env, CI_LOCAL_QUEUE: 'off' } }).done
     assert.match(kept.err, new RegExp(`the events file .* belongs to run ${process.pid}, still going`))
     assert.equal(defaultEvents(cache, 'same-ci').length, 1)
+  })
+}
+
+// ------------------------------------------------ the start time, within a tolerance; pids 0 and 1
+
+test('a ticket whose start time is 2 s off the real one is a live run’s (the clock was adjusted); 10 s off, a dead run’s', async () => {
+  const dir = project('proj-a', [WORK])
+  const real = startOf(process.pid)
+  const queue = scratch()
+  plantTicket(queue, process.pid, { ms: 1, pidStart: shifted(real, 2) })
+  const busy = await start(['--no-wait'], { cwd: dir, queue }).done
+  assert.equal(busy.status, 3)
+  assert.equal(busy.err, `ci-local: the machine is busy: ghost (pid ${process.pid})\n`)
+  assert.equal(existsSync(join(dir, 'ran')), false)
+
+  const queue2 = scratch()
+  plantTicket(queue2, process.pid, { ms: 1, pidStart: shifted(real, -10) })
+  const free = await start([], { cwd: dir, queue: queue2 }).done
+  assert.equal(free.status, 0, free.err)
+  assert.doesNotMatch(free.out, /Waiting for/)
+  assert.deepEqual(readdirSync(queue2), [])
+})
+
+test('a lock whose start time is 2 s off the real one is held; 10 s off, taken over', async () => {
+  const dir = project('proj-a', [WORK])
+  const real = startOf(process.pid)
+  const queue = scratch()
+  plantLock(queue, { pid: process.pid, project: 'holder', pidStart: shifted(real, -2) })
+  const busy = await start(['--no-wait'], { cwd: dir, queue }).done
+  assert.equal(busy.status, 3)
+  assert.equal(existsSync(join(queue, 'lock')), true, 'a live lock is never removed')
+
+  const queue2 = scratch()
+  plantLock(queue2, { pid: process.pid, project: 'ghost', pidStart: shifted(real, 10) })
+  const free = await start([], { cwd: dir, queue: queue2 }).done
+  assert.equal(free.status, 0, free.err)
+  assert.deepEqual(readdirSync(queue2), [])
+})
+
+test('a start time that is not a date is compared as text: equal is alive, anything else gone', async () => {
+  const dir = project('proj-a', [WORK])
+  const queue = scratch()
+  plantTicket(queue, process.pid, { ms: 1, pidStart: 'not a date' })
+  const free = await start([], { cwd: dir, queue }).done
+  assert.equal(free.status, 0, free.err)
+  assert.doesNotMatch(free.out, /Waiting for/)
+})
+
+test('a ticket or a lock with pid 0 or 1 is nobody’s: ignored and removed, taken over', async () => {
+  const dir = project('proj-a', [WORK])
+  for (const pid of [0, 1]) {
+    const queue = scratch()
+    plantTicket(queue, pid, { ms: 1 })
+    plantLock(queue, { pid, project: 'ghost' })
+    const { status, out, err } = await start([], { cwd: dir, queue }).done
+    assert.equal(status, 0, `pid ${pid}: ${err}`)
+    assert.doesNotMatch(out, /Waiting for/, `pid ${pid}`)
+    assert.deepEqual(readdirSync(queue), [], `pid ${pid}`)
+  }
+})
+
+for (const pid of [0, 1]) {
+  test(`events file of a run with pid ${pid}: nobody’s, the next run takes it over`, async () => {
+    const cache = scratch('cache-')
+    const file = join(cache, 'ci-local', 'same-ci.ndjson')
+    mkdirSync(join(cache, 'ci-local'), { recursive: true })
+    writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), event: 'run', project: 'same-ci', pid, total: 1, args: [] }) + '\n')
+    const dir = project('same-ci', [WORK])
+    const taken = await start([], { cwd: dir, queue: scratch(), env: { XDG_CACHE_HOME: cache, CI_LOCAL_QUEUE: 'off' } }).done
+    assert.equal(taken.status, 0, taken.err)
+    assert.doesNotMatch(taken.err, /belongs to run/)
+    assert.equal(defaultEvents(cache, 'same-ci').at(-1).result, 'passed')
   })
 }
 
