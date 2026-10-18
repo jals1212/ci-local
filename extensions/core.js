@@ -144,36 +144,44 @@ export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = aliv
  * started, or null. A run already over then is shown only while its result
  * is still undelivered: no session showed it finished (it ended with every
  * session of the repository closed). Once delivered it is old news, in a new
- * session or a resumed one, except on a reload (the session already showed
- * it). A run in flight is shown, and so is every run after it.
+ * session or a resumed one. A reload keeps what the session had: the run
+ * shows again only if this session is the one that showed it. A run in
+ * flight is shown, and so is every run after it.
  */
-export function staleAtStart(run, { reason, delivered } = {}) {
-  if (!run || !FINISHED.has(run.state.state) || reason === 'reload') return null
-  return run.key === delivered ? run.key : null
+export function staleAtStart(run, { reason, sessionId, delivered } = {}) {
+  if (!run || !FINISHED.has(run.state.state) || delivered?.key !== run.key) return null
+  if (reason === 'reload' && (!delivered.session || delivered.session === sessionId)) return null
+  return run.key
 }
 
 /** The marker of the last run whose result a session showed: next to its events file. */
 const deliveredFile = (file) => `${file}.delivered`
 
-/** The key of the last run whose result was delivered (shown finished), or null. */
+/**
+ * The last run whose result was delivered (shown finished) and the session
+ * that showed it, or null. A marker with the key alone (0.5.1) names no session.
+ */
 export function readDelivered(file) {
+  let text
   try {
-    return readFileSync(deliveredFile(file), 'utf8').trim() || null
+    text = readFileSync(deliveredFile(file), 'utf8')
   } catch {
     return null
   }
+  const [key, session] = text.trim().split('\t')
+  return key ? { key, session: session || null } : null
 }
 
 /**
- * Records that the result of run `key` was delivered. Written whole (a
- * temporary file, then a rename); a failure is ignored: the result is then
- * shown once more, never lost.
+ * Records that the result of run `key` was delivered, by `session`. Written
+ * whole (a temporary file, then a rename); a failure is ignored: the result
+ * is then shown once more, never lost.
  */
-export function markDelivered(file, key) {
+export function markDelivered(file, key, session) {
   const target = deliveredFile(file)
   const temporary = `${target}.${process.pid}.tmp`
   try {
-    writeFileSync(temporary, `${key}\n`, { mode: 0o600 })
+    writeFileSync(temporary, `${key}\t${session ?? ''}\n`, { mode: 0o600 })
     renameSync(temporary, target)
   } catch {
     try {

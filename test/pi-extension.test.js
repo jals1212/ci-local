@@ -397,25 +397,31 @@ test('runState carries the session a run names, or null', () => {
   assert.equal(readRun(eventsFile([run()])).state.session, null)
 })
 
-test('staleAtStart: a run already over when a session starts is hidden once its result was delivered, unless the extension reloads', () => {
+test('staleAtStart: a run already over when a session starts is hidden once its result was delivered; a reload shows it only if this session showed it', () => {
   const over = readRun(eventsFile([run(), { ts: ago(1000), event: 'end', result: 'passed', durationMs: 1000 }]))
   const live = readRun(eventsFile([run()]))
-  assert.equal(staleAtStart(null, { reason: 'startup', delivered: null }), null, 'no run: nothing to hide')
-  assert.equal(staleAtStart(live, { reason: 'startup', delivered: live.key }), null, 'in flight: shown')
-  assert.equal(staleAtStart(over, { reason: 'startup', delivered: null }), null, 'never delivered (ended with no session open): shown')
-  assert.equal(staleAtStart(over, { reason: 'new', delivered: 'an|older' }), null, 'an older run was delivered, not this one: shown')
-  assert.equal(staleAtStart(over, { reason: 'startup', delivered: over.key }), over.key, 'already delivered: hidden')
-  assert.equal(staleAtStart(over, { reason: 'resume', delivered: over.key }), over.key, 'resumed, already delivered: hidden')
-  assert.equal(staleAtStart(over, { reason: 'reload', delivered: over.key }), null, 'a reload keeps what the session showed')
+  const by = (session, key = over.key) => ({ key, session })
+  const at = (reason, delivered) => ({ reason, sessionId: 'me', delivered })
+  assert.equal(staleAtStart(null, at('startup', null)), null, 'no run: nothing to hide')
+  assert.equal(staleAtStart(live, at('startup', by('other', live.key))), null, 'in flight: shown')
+  assert.equal(staleAtStart(over, at('startup', null)), null, 'never delivered (ended with no session open): shown')
+  assert.equal(staleAtStart(over, at('new', by('other', 'an|older'))), null, 'an older run was delivered, not this one: shown')
+  assert.equal(staleAtStart(over, at('startup', by('other'))), over.key, 'already delivered: hidden')
+  assert.equal(staleAtStart(over, at('resume', by('me'))), over.key, 'resumed, delivered before it closed: hidden')
+  assert.equal(staleAtStart(over, at('reload', by('me'))), null, 'a reload keeps it when this session showed it')
+  assert.equal(staleAtStart(over, at('reload', by('other'))), over.key, 'a reload keeps it hidden when this session hid it')
+  assert.equal(staleAtStart(over, at('reload', by(null))), null, 'a marker that names no session: a reload shows it')
 })
 
-test('delivered marker: none at first, then the key of the last run whose result was shown, per events file', () => {
+test('delivered marker: none at first, then the last run whose result was shown and the session that showed it', () => {
   const file = join(mkdtempSync(join(tmpdir(), 'dv-')), 'myapp-ci.ndjson')
   assert.equal(readDelivered(file), null)
-  markDelivered(file, '2025-01-01T00:00:00Z|42')
-  assert.equal(readDelivered(file), '2025-01-01T00:00:00Z|42')
-  markDelivered(file, '2025-01-02T00:00:00Z|43')
-  assert.equal(readDelivered(file), '2025-01-02T00:00:00Z|43')
+  markDelivered(file, '2025-01-01T00:00:00Z|42', 'me')
+  assert.deepEqual(readDelivered(file), { key: '2025-01-01T00:00:00Z|42', session: 'me' })
+  markDelivered(file, '2025-01-02T00:00:00Z|43', 'other')
+  assert.deepEqual(readDelivered(file), { key: '2025-01-02T00:00:00Z|43', session: 'other' })
+  writeFileSync(`${file}.delivered`, '2025-01-03T00:00:00Z|44\n') // a 0.5.1 marker: the key alone
+  assert.deepEqual(readDelivered(file), { key: '2025-01-03T00:00:00Z|44', session: null })
   assert.equal(readDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson')), null)
-  markDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson'), 'k') // no directory: ignored, never thrown
+  markDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson'), 'k', 'me') // no directory: ignored, never thrown
 })

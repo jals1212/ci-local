@@ -7,6 +7,13 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Fixed
+
+- Pi status line: after a reload, a run the session had left out at its start
+  (already delivered by another session) stays out; before, it showed again.
+  The delivered marker now also names the session that showed the run (a
+  0.5.1 marker, the run alone, still reads).
+
 ## 0.5.1
 
 ### Fixed

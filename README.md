@@ -361,8 +361,9 @@ runs ci-local or Docker itself:
   the next run. A run already over when a session starts shows only while its
   result is undelivered, like an unread message: it ended with no session of
   the repository open. Once a session has shown it finished, a later session
-  (new or resumed) leaves it out; the marker is `<events file>.delivered`. A
-  run in flight, and every later one, shows. Pi shows it in the footer. A shell that draws its own chrome
+  (new or resumed) leaves it out, and a reload keeps it out unless that
+  session is the one that showed it; the marker, `<events file>.delivered`,
+  holds the run and the session. A run in flight, and every later one, shows. Pi shows it in the footer. A shell that draws its own chrome
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).

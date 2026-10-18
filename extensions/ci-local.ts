@@ -155,11 +155,12 @@ export default function ciLocal(pi: ExtensionAPI) {
     }
 
     // A run already over when the session starts, whose result a session
-    // already showed, stays out of the status line (see staleAtStart); the
-    // next run shows as usual.
+    // already showed, stays out of the status line, and stays out after a
+    // reload unless this session showed it (see staleAtStart); the next run
+    // shows as usual.
     let stale: string | null = null
     try {
-      stale = staleAtStart(readRun(file), { reason: event.reason, delivered: readDelivered(file) })
+      stale = staleAtStart(readRun(file), { reason: event.reason, sessionId, delivered: readDelivered(file) })
     } catch {
       // a half-written file: a run in progress, shown as usual
     }
@@ -177,7 +178,7 @@ export default function ciLocal(pi: ExtensionAPI) {
         shown = footer
         // A finished run shown is a result delivered: a later session of this
         // repository leaves it out (see staleAtStart).
-        if (run && footer && FINISHED.has(run.state.state)) markDelivered(file, run.key)
+        if (run && footer && FINISHED.has(run.state.state)) markDelivered(file, run.key, sessionId)
       }
       // Only this session's own runs get cards and reach the agent, as Gentle
       // AI's job notices go only to the session that started the job. Another
