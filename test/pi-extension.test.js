@@ -207,6 +207,23 @@ const IDLE = { idle: true, runActive: false }
 const IN_RUN = { idle: false, runActive: true }
 const HOLD = { idle: false, runActive: false }
 
+test('the delivery asks whether the run’s process is the run’s, with the start time the run recorded', () => {
+  const asked = []
+  const clock = { now: 1_000 }
+  const d = createDelivery({ isAlive: (pid, pidStart) => (asked.push([pid, pidStart]), true), now: () => clock.now })
+  d.ended({ key: 'run-7', state: { pid: 7, pidStart: 'Mon Jan  1 00:00:00 2001', state: 'passed' } })
+  d.done(d.next(IDLE))
+  d.next(IDLE)
+  assert.deepEqual(asked, [[7, 'Mon Jan  1 00:00:00 2001']])
+})
+
+test('launchedBy: the start time of the run goes to the liveness check', () => {
+  const asked = []
+  const isAlive = (pid, pidStart) => (asked.push([pid, pidStart]), true)
+  assert.equal(launchedBy(1000, 900, { parentOf: () => null, isAlive, pidStart: 'S' }), true)
+  assert.deepEqual(asked, [[1000, 'S']])
+})
+
 test('idle agent: the card is stored at the end event, at once, without waking the agent', () => {
   const { d, living } = delivery()
   living.add(7) // the run's process is still cleaning up

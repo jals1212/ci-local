@@ -113,9 +113,9 @@ export function parentPid(pid, { ps = 'ps' } = {}) {
  * none (a Gentle AI background job, a terminal) is decided by its process
  * tree (launchedBy).
  */
-export function ownsRun(run, { sessionId, launched = (pid) => launchedBy(pid, process.pid) }) {
+export function ownsRun(run, { sessionId, launched = (pid, pidStart) => launchedBy(pid, process.pid, { pidStart }) }) {
   const named = run.state.session
-  return named ? named === sessionId : launched(run.state.pid)
+  return named ? named === sessionId : launched(run.state.pid, run.state.pidStart)
 }
 
 /**
@@ -127,9 +127,9 @@ export function ownsRun(run, { sessionId, launched = (pid) => launchedBy(pid, pr
  * run cannot be read (`ps` missing or failing), the run counts as this
  * session's: a card shown twice is better than one lost.
  */
-export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = alive } = {}) {
+export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = alive, pidStart } = {}) {
   let current = parentOf(pid)
-  if (current === undefined || (current === null && isAlive(pid))) return true
+  if (current === undefined || (current === null && isAlive(pid, pidStart))) return true
   const seen = new Set()
   while (current !== null && current !== undefined && current > 1 && !seen.has(current)) {
     if (current === ancestor) return true
@@ -391,14 +391,14 @@ export function deliveryOptions(action) {
  */
 export function createDelivery({ isAlive = alive, now = Date.now } = {}) {
   const cards = [] // ended runs, oldest first
-  let wake = null // { pid, since, exitSeenAt } owed to an idle agent
+  let wake = null // { pid, pidStart, since, exitSeenAt } owed to an idle agent
   let failures = 0
   let retryAt = 0 // nothing before this; Infinity: until a boundary
 
   const wakeDue = () => {
     if (!wake) return false
     if (now() - wake.since >= CARD_GRACE_MS) return true
-    if (isAlive(wake.pid)) return false
+    if (isAlive(wake.pid, wake.pidStart)) return false
     wake.exitSeenAt ??= now()
     return now() - wake.exitSeenAt >= WAKE_GRACE_MS
   }
@@ -424,10 +424,10 @@ export function createDelivery({ isAlive = alive, now = Date.now } = {}) {
     },
     done(action) {
       failures = 0
-      if (action.kind === 'store') wake = { pid: action.run.state.pid, since: now(), exitSeenAt: null }
+      if (action.kind === 'store') wake = { pid: action.run.state.pid, pidStart: action.run.state.pidStart, since: now(), exitSeenAt: null }
     },
     failed(action) {
-      if (action.kind === 'wake') wake = { pid: null, since: -Infinity, exitSeenAt: null }
+      if (action.kind === 'wake') wake = { pid: null, pidStart: null, since: -Infinity, exitSeenAt: null }
       else cards.unshift(action.run)
       failures += 1
       retryAt = failures > CARD_RETRY_LIMIT ? Infinity : now() + CARD_RETRY_MS

@@ -7,6 +7,7 @@
 // running, 4 stopped (interrupted, or the process is gone without an end
 // event, or before its turn came).
 
+import { spawnSync } from 'node:child_process'
 import { readFileSync, realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
@@ -45,15 +46,41 @@ function firstOfQueuedSeries(events, index) {
   return first
 }
 
-/** True when a process with this pid exists (ours or not). */
-export function alive(pid) {
+/**
+ * The start time of a process, as `bin/ci-local` records it next to the pid
+ * (its `pid_start`, which must give the same string): `ps -o lstart=` reads on
+ * macOS and on Linux alike, where /proc exists only on Linux. Its text depends
+ * on the locale and the time zone, so both are fixed here, and whitespace is
+ * squeezed (a one-digit day is padded). Null when the process is gone or ps
+ * cannot say.
+ */
+export function pidStart(pid) {
+  if (!Number.isInteger(pid)) return null
+  const out = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    encoding: 'utf8',
+    env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
+  })
+  const start = out.error || out.status !== 0 ? '' : out.stdout.trim().replace(/\s+/g, ' ')
+  return start || null
+}
+
+/**
+ * True when a process with this pid exists (ours or not) and, when `start` (the
+ * start time the run recorded) is given, started then: a pid that started at
+ * another time was given to another process after the run it names was gone.
+ * Without `start` (an event from before 0.6.0), or when ps cannot tell the
+ * start now, the pid alone decides.
+ */
+export function alive(pid, start) {
   if (!Number.isInteger(pid)) return false
   try {
     process.kill(pid, 0)
-    return true
   } catch (error) {
-    return error.code === 'EPERM'
+    if (error.code !== 'EPERM') return false
   }
+  if (typeof start !== 'string' || !start) return true
+  const now = pidStart(pid)
+  return now === null || now === start
 }
 
 /**
@@ -85,7 +112,7 @@ const FINISHED_AS = { passed: 'passed', interrupted: 'stopped' }
  */
 function stateOf({ end, run, lastQueued, isAlive }) {
   if (end) return FINISHED_AS[end.result] ?? 'failed'
-  if (!isAlive(run.pid)) return 'stopped'
+  if (!isAlive(run.pid, run.pidStart)) return 'stopped'
   if (run.event === 'run') return 'running'
   const waiting = (lastQueued?.ahead ?? 0) > 0 || Boolean(lastQueued?.blockedBy)
   return waiting ? 'queued' : 'starting'
@@ -119,6 +146,8 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
     command: ['ci-local', ...(run.args ?? []).map(quote)].join(' '),
     logDir: run.logDir ?? null,
     pid: run.pid,
+    // Its start time, from when it recorded it: tells it from a process given its pid since.
+    pidStart: run.pidStart ?? null,
     // The Pi session that started the run (PI_SESSION_ID), or null.
     session: run.session ?? null,
     step,

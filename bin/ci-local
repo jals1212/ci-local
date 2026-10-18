@@ -476,6 +476,10 @@ Options:
                   first come first served, so Docker has one at a time.
                   CI_LOCAL_QUEUE=off lets runs overlap; the queue lives in
                   CI_LOCAL_QUEUE_DIR (default ~/.cache/ci-local/queue).
+                  A waiting run says every CI_LOCAL_QUEUE_NOTICE seconds
+                  (default 300; 0: never) that it still waits. After
+                  CI_LOCAL_QUEUE_TIMEOUT seconds (default 0: no limit) it
+                  gives up, leaves the queue and exits with status 3.
                   --list, --print-plan, --down and --status do not queue.
   --status        Print the state of the last run (queued, starting, running,
                   passed, failed, stopped) as a short Markdown block, from
@@ -488,8 +492,10 @@ Options:
   -h, --help      This text.
 
 Exit status: 0 when every step passed, 1 on the first failing step (named in
-the summary), 2 on a usage or configuration error, 3 busy with --no-wait,
-130 or 143 when interrupted. Environment variables and files: see README.
+the summary), 2 on a usage or configuration error, 130 or 143 when
+interrupted, and
+3 busy (--no-wait, or CI_LOCAL_QUEUE_TIMEOUT) when the run got no turn.
+Environment variables and files: see README.
 USAGE
 }
 
@@ -516,6 +522,10 @@ case "${CI_LOCAL_QUEUE:-}" in 0 | off | false | no) QUEUE=0 ;; esac
 QUEUE_POLL="${CI_LOCAL_QUEUE_POLL:-2}" # seconds between two looks at the queue
 # A number above 0: with 0 the wait would be a busy loop.
 [[ "$QUEUE_POLL" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$QUEUE_POLL" =~ ^0*(\.0*)?$ ]] || QUEUE_POLL=2
+# Seconds a run waits for its turn before it gives up (0: no limit), and
+# between two "Still waiting" lines (0: none). Checked when a real run starts.
+QUEUE_TIMEOUT="${CI_LOCAL_QUEUE_TIMEOUT:-0}"
+QUEUE_NOTICE="${CI_LOCAL_QUEUE_NOTICE:-300}"
 EVENTS="${CI_LOCAL_EVENTS:-}"
 # Without --events a run writes to the default file (see DEFAULT_EVENTS);
 # CI_LOCAL_EVENTS=off writes none.
@@ -730,6 +740,19 @@ fi
 # A run is next: now the refused cache is worth saying.
 [[ -z "$CACHE_REFUSED" ]] || echo "$CACHE_REFUSED" >&2
 
+# A wrong value is said before anything is queued or touched. At most nine
+# digits, so the arithmetic below cannot overflow.
+for name in CI_LOCAL_QUEUE_TIMEOUT CI_LOCAL_QUEUE_NOTICE; do
+  value="${!name:-}"
+  if [[ -n "$value" && ! "$value" =~ ^[0-9]{1,9}$ ]]; then
+    if [[ "$name" == CI_LOCAL_QUEUE_TIMEOUT ]]; then zero="no limit"; else zero="no periodic line"; fi
+    echo "ci-local: $name must be a whole number of seconds (0: $zero), got '$value'" >&2
+    exit 2
+  fi
+done
+QUEUE_TIMEOUT=$((10#$QUEUE_TIMEOUT))
+QUEUE_NOTICE=$((10#$QUEUE_NOTICE))
+
 [[ "$(type -t ci_preflight)" != function ]] || ci_preflight
 
 # -------------------------------------------------------------------- run
@@ -854,9 +877,12 @@ run_plan() {
 # a ticket, named by the time it came, and goes ahead when its ticket is the
 # first of a live process AND it wins the lock directory.
 #
-#   QUEUE_DIR/<epoch-ms>-<pid>   one ticket per run, with project=, pid=, repo=
+#   QUEUE_DIR/<epoch-ms>-<pid>   one ticket per run, with project=, pid=,
+#                                pidStart= (its start time), repo=
 #   QUEUE_DIR/lock/              made with mkdir (atomic) by the run in turn;
-#                                lock/pid names it, lock/project says whose
+#                                lock/pid names it (its pid, then its start
+#                                time: older versions read the first line
+#                                alone), lock/project says whose
 
 QUEUE_DIR=""
 MY_NAME=""
@@ -868,11 +894,32 @@ FIRST_TICKET=""  # the first of them
 BLOCK_PROJECT="" # who we wait for ("" when nobody)
 BLOCK_PID=""
 
+# The start time of a process, the same string whoever asks: what tells a run
+# from another process that was given its pid later. `ps -o lstart=` reads on
+# macOS (BSD ps, bash 3.2) and on Linux (procps) alike, where /proc exists
+# only on Linux. Its text depends on the locale and the time zone, so both are
+# fixed here; status.js (pidStart) does the same and must give the same
+# string. Whitespace is squeezed (a one-digit day is padded). Nothing when the
+# process is gone or ps cannot say.
+pid_start() {
+  local out parts
+  out="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null)" || return 0
+  read -ra parts <<<"$out" || true
+  [[ ${#parts[@]} -eq 0 ]] || echo "${parts[*]}"
+}
+
 # True when a process with this pid exists (ours or not: kill says EPERM for
-# another user's, ps still lists it).
+# another user's, ps still lists it) and, when START (its recorded start time)
+# is given, started then: a pid that started at another time was given to
+# another process after the run it names was gone. Without START, or when ps
+# cannot tell the start now, the pid alone decides, as before 0.6.0.
 pid_alive() {
+  local now
   [[ "$1" =~ ^[0-9]+$ ]] || return 1
-  kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1
+  kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1 || return 1
+  [[ -n "${2:-}" ]] || return 0
+  now="$(pid_start "$1")"
+  [[ -z "$now" || "$now" == "$2" ]]
 }
 
 # ticket_value FILE KEY: what follows `KEY=` in the file; nothing when absent.
@@ -904,7 +951,7 @@ queue_setup() {
 # Our ticket, complete or absent: written aside, then moved into place.
 write_ticket() {
   local tmp="$QUEUE_DIR/.ticket.$$"
-  printf 'project=%s\npid=%s\nrepo=%s\n' "$CI_PROJECT" "$$" "$REPO" >"$tmp" && mv "$tmp" "$MY_TICKET"
+  printf 'project=%s\npid=%s\npidStart=%s\nrepo=%s\n' "$CI_PROJECT" "$$" "$MY_START" "$REPO" >"$tmp" && mv "$tmp" "$MY_TICKET"
 }
 
 # Counts the live tickets before ours into AHEAD (FIRST_TICKET is the first)
@@ -919,7 +966,7 @@ queue_scan() {
     [[ "$name" =~ ^[0-9]{15}-[0-9]{10}$ ]] || continue
     [[ "$name" != "$MY_NAME" ]] || return 0
     pid=$((10#${name##*-}))
-    if pid_alive "$pid"; then
+    if pid_alive "$pid" "$(ticket_value "$f" pidStart)"; then
       AHEAD=$((AHEAD + 1))
       [[ -n "$FIRST_TICKET" ]] || FIRST_TICKET=$f
     else
@@ -934,12 +981,12 @@ queue_scan() {
 # never removed. A lock with no pid yet is a run between mkdir and its
 # write: held, until it is older than 10 seconds.
 queue_lock() {
-  local lock="$QUEUE_DIR/lock" holder mtime
+  local lock="$QUEUE_DIR/lock" holder hstart mtime
   for _ in 1 2; do
     if mkdir "$lock" 2>/dev/null; then
       HAVE_LOCK=1
       printf '%s' "$CI_PROJECT" >"$lock/project"
-      printf '%s\n' "$$" >"$lock/pid"
+      printf '%s\n%s\n' "$$" "$MY_START" >"$lock/pid"
       return 0
     fi
     BLOCK_PROJECT="$(cat "$lock/project" 2>/dev/null || true)"
@@ -947,10 +994,11 @@ queue_lock() {
     [[ -n "$BLOCK_PROJECT" || -d "$lock" ]] || continue
     [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
     holder=""
-    [[ ! -f "$lock/pid" ]] || read -r holder <"$lock/pid" 2>/dev/null || true
+    hstart=""
+    [[ ! -f "$lock/pid" ]] || { read -r holder && read -r hstart; } 2>/dev/null <"$lock/pid" || true
     if [[ "$holder" =~ ^[0-9]+$ ]]; then
       holder=$((10#$holder))
-      if pid_alive "$holder"; then
+      if pid_alive "$holder" "$hstart"; then
         BLOCK_PID=$holder
         return 1
       fi
@@ -1036,13 +1084,15 @@ emit_queued() {
   local by=null
   [[ -z "$BLOCK_PROJECT" ]] ||
     by="{\"project\":$(json_string "$BLOCK_PROJECT"),\"pid\":${BLOCK_PID:-null}}"
-  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ahead\":$AHEAD,\"blockedBy\":$by"
+  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ahead\":$AHEAD,\"blockedBy\":$by"
 }
 
 # Waits for the turn, and takes the lock. Prints what it waits for when that
-# changes; with --no-wait, a busy machine is status 3.
+# changes, and again every QUEUE_NOTICE seconds so a hang shows. With --no-wait
+# a busy machine is status 3, and so is a wait of QUEUE_TIMEOUT seconds: the
+# run did not get a turn, which is not a failure of its steps.
 queue_wait() {
-  local key last="" began=$SECONDS waited=0 got
+  local key last="" began=$SECONDS noticed=$SECONDS waited=0 got
   AHEAD=0
   BLOCK_PROJECT=""
   BLOCK_PID=""
@@ -1077,9 +1127,18 @@ queue_wait() {
       if [[ $got -eq 0 ]]; then
         echo "Waiting for $BLOCK_PROJECT (pid ${BLOCK_PID:-?}) · $AHEAD ahead"
         waited=1
+        noticed=$SECONDS
       fi
+    elif [[ $got -eq 0 && $QUEUE_NOTICE -gt 0 && $((SECONDS - noticed)) -ge $QUEUE_NOTICE ]]; then
+      echo "Still waiting for $BLOCK_PROJECT (pid ${BLOCK_PID:-?}) · $AHEAD ahead · $(fmt_duration $((SECONDS - began)))"
+      noticed=$SECONDS
     fi
     [[ $got -eq 0 ]] || break
+    # After the look: a turn that came at the deadline is taken.
+    if [[ $QUEUE_TIMEOUT -gt 0 && $((SECONDS - began)) -ge $QUEUE_TIMEOUT ]]; then
+      echo "ci-local: gave up waiting after $(fmt_duration $((SECONDS - began))) for $BLOCK_PROJECT (pid ${BLOCK_PID:-?})" >&2
+      exit 3
+    fi
     # In the background and waited for: a signal is handled at once.
     sleep "$QUEUE_POLL" &
     SLEEPER=$!
@@ -1151,15 +1210,18 @@ finish() {
 }
 
 # The pid of another run, still going, whose events FILE holds (its first
-# event names it and no end event closed it); nothing otherwise.
+# event names it, with its start time, and no end event closed it); nothing
+# otherwise.
 events_owner() {
-  local first pid
+  local first pid start=""
   [[ -s "$1" ]] || return 0
   ! grep -q '"event":"end"' "$1" 2>/dev/null || return 0
   IFS= read -r first <"$1" 2>/dev/null || return 0
   [[ "$first" =~ \"pid\":([0-9]+) ]] || return 0
   pid=${BASH_REMATCH[1]}
-  if [[ "$pid" != "$$" ]] && pid_alive "$pid"; then echo "$pid"; fi
+  # No pidStart in an event from before 0.6.0: the pid alone decides.
+  [[ ! "$first" =~ \"pidStart\":\"([^\"]*)\" ]] || start=${BASH_REMATCH[1]}
+  if [[ "$pid" != "$$" ]] && pid_alive "$pid" "$start"; then echo "$pid"; fi
   return 0
 }
 
@@ -1191,6 +1253,11 @@ fi
 RUN_SESSION=null
 [[ -z "${PI_SESSION_ID:-}" ]] || RUN_SESSION="$(json_string "$PI_SESSION_ID")"
 RUN_LOG_DIR=null
+# This process's start time, recorded next to its pid (see pid_start); null
+# when ps cannot say, and the pid alone then identifies the run.
+MY_START="$(pid_start "$$")"
+MY_START_JSON=null
+[[ -z "$MY_START" ]] || MY_START_JSON="$(json_string "$MY_START")"
 [[ -z "$LOG_DIR" ]] || RUN_LOG_DIR="$(json_string "$LOG_DIR")"
 
 # claim_events FILE: takes FILE for this run when no live run owns it:
@@ -1293,8 +1360,9 @@ fi
 teardown
 PLAN_STARTED=1
 # RUN_MS: the run event's time, from which the end event's durationMs counts.
-# pid: --status tells a run still going from one killed before its end event.
-emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION"
+# pid and pidStart: --status tells a run still going from one killed before its
+# end event, and from another process that was given its pid since.
+emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION"
 RUN_MS=${EV_MS:-}
 # Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
 # subshells included, and host steps rely on it.

@@ -11,6 +11,8 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { alive, pidStart } from '../status.js'
+
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
 chmodSync(join(FAKE_DOCKER, 'docker'), 0o755)
@@ -360,3 +362,48 @@ test('BRAND: one emoji names ci-local, before every state mark', async () => {
   assert.equal(BRAND, '🚦')
   for (const mark of Object.values(GLYPHS)) assert.equal([...mark].length, 1)
 })
+
+/** The start time of a live process, read here with its own `ps` call: what a run must record. */
+const startOf = (pid) =>
+  spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout
+    .trim()
+    .replace(/\s+/g, ' ')
+
+test('pidStart: the start time of a live process, the same for every ci-local (locale and time zone do not change it); none for a gone one', () => {
+  const start = startOf(process.pid)
+  assert.match(start, /^\w{3} \w{3} \d{1,2} \d\d:\d\d:\d\d \d{4}$/)
+  assert.equal(pidStart(process.pid), start)
+  assert.equal(pidStart(deadPid()), null)
+  assert.equal(pidStart(null), null)
+})
+
+test('alive: a pid counts as gone when its recorded start time differs, and as before when there is none', () => {
+  const start = startOf(process.pid)
+  assert.equal(alive(process.pid, start), true)
+  assert.equal(alive(process.pid, 'Mon Jan  1 00:00:00 2001'), false, 'the pid was given to another process')
+  assert.equal(alive(process.pid), true, 'an event without a start time: the pid alone')
+  assert.equal(alive(process.pid, null), true)
+  assert.equal(alive(deadPid(), start), false)
+})
+
+for (const [name, make] of [
+  ['run', (fields) => [runEvent(fields)]],
+  ['queued', (fields) => [queuedEvent(fields)]],
+]) {
+  test(`--status on a ${name} event whose pid lives but started at another time: stopped, status 4`, () => {
+    const { status: code, out } = status(['--events', eventsFile(make({ pidStart: 'Mon Jan  1 00:00:00 2001' }))])
+    assert.equal(code, 4)
+    assert.match(out, /^> 🚦 ⊘ \*\*ci-local\*\* · stopped\n/)
+  })
+
+  test(`--status on a ${name} event whose pid lives and started at the recorded time: still going, status 3`, () => {
+    const { status: code, out } = status(['--events', eventsFile(make({ pidStart: startOf(process.pid) }))])
+    assert.equal(code, 3)
+    assert.doesNotMatch(out, /stopped/)
+  })
+
+  test(`--status on a ${name} event with no start time (an older run): the pid alone decides`, () => {
+    const { status: code } = status(['--events', eventsFile(make({}))])
+    assert.equal(code, 3)
+  })
+}
