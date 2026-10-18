@@ -2,6 +2,7 @@
 // follows, the footer line, and when a run it watched has ended. The
 // rendering and the states are those of `ci-local --status` (status.js).
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
@@ -93,6 +94,50 @@ export function readRun(file, options) {
 }
 
 export const FINISHED = new Set(['passed', 'failed', 'stopped'])
+
+/**
+ * The parent of a live process; null when the process is gone, undefined when
+ * `ps` cannot run here (so its parents cannot be known).
+ */
+export function parentPid(pid, { ps = 'ps' } = {}) {
+  const out = spawnSync(ps, ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' })
+  if (out.error) return undefined
+  const ppid = Number.parseInt(out.stdout, 10)
+  return out.status === 0 && Number.isInteger(ppid) ? ppid : null
+}
+
+/**
+ * Whether a run is this session's own. A run that names the Pi session that
+ * started it (ci-local records PI_SESSION_ID, which Pi gives its bash tool)
+ * belongs to that session alone, wherever its process went. One that names
+ * none (a Gentle AI background job, a terminal) is decided by its process
+ * tree (launchedBy).
+ */
+export function ownsRun(run, { sessionId, launched = (pid) => launchedBy(pid, process.pid) }) {
+  const named = run.state.session
+  return named ? named === sessionId : launched(run.state.pid)
+}
+
+/**
+ * True when the process `pid` descends from `ancestor`: a run this session
+ * started (its bash tool, or a background job of it) and so one it owns, as
+ * Gentle AI's background jobs belong to the session that started them. A run
+ * of another session in the same repository, or one started in a terminal,
+ * is not, and neither is a process that is gone. When the parents of a live
+ * run cannot be read (`ps` missing or failing), the run counts as this
+ * session's: a card shown twice is better than one lost.
+ */
+export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = alive } = {}) {
+  let current = parentOf(pid)
+  if (current === undefined || (current === null && isAlive(pid))) return true
+  const seen = new Set()
+  while (current !== null && current !== undefined && current > 1 && !seen.has(current)) {
+    if (current === ancestor) return true
+    seen.add(current)
+    current = parentOf(current)
+  }
+  return false
+}
 
 /** One short line for the footer. */
 export function footerText(state) {

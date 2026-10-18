@@ -195,8 +195,8 @@ Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
-| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `commit`, `args`, `logDir` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
-| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (`--quiet`; else `null`) |
+| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `commit`, `args`, `logDir`, `session` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
+| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (`--quiet`; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`) |
 | `start` | a step starts | `step`, `index` (from 1), `total`; `log` with `--quiet` |
 | `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` with `--quiet` |
 | `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` with `--quiet` |
@@ -349,6 +349,14 @@ runs ci-local or Docker itself:
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).
+- **Only the session's own runs** get the cards and the notification, and
+  reach the agent: runs this session started. A run started from Pi's bash
+  tool names its session (ci-local records Pi's `PI_SESSION_ID` as `session`
+  in its events), wherever its process goes; one that names none, as a
+  Gentle AI background job, is the session's when its process descends from
+  the session's. A run started by another session in the same repository,
+  or in a terminal, shows in the status line alone, as Gentle AI's
+  background-job notices go only to the session that started the job.
 - **When a run starts**: a card in the transcript when it is starting, or
   waiting for its turn (`⏳ ci-local · queued · behind erp-ci`), and another
   when its steps start (`🐳 ci-local · running · [1/14] …`). They are for you

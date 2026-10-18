@@ -38,6 +38,7 @@ function ciLocal(args, { cwd, env = {} }) {
     const base = { ...process.env }
     delete base.CI_LOCAL_QUIET
     delete base.CI_LOCAL_EVENTS
+    delete base.PI_SESSION_ID
     delete base.CI_LOCAL_QUEUE
     delete base.CI_LOCAL_QUEUE_POLL
     child = spawn('bash', [BIN, ...args], {
@@ -179,6 +180,7 @@ test('--events writes one JSON object per milestone, in order, with --only and -
     'logDir',
     'pid',
     'project',
+    'session',
     'total',
     'ts',
     'version',
@@ -192,10 +194,13 @@ test('--events writes one JSON object per milestone, in order, with --only and -
     'logDir',
     'pid',
     'project',
+    'session',
     'ts',
     'version',
   ])
   assert.equal(queued.project, 'ci-local-selftest')
+  assert.equal(run.session, null, 'not started by a Pi session')
+  assert.equal(queued.session, null)
   assert.equal(queued.pid, run.pid)
   assert.deepEqual([queued.ahead, queued.blockedBy], [0, null], 'nobody else is running')
   assert.deepEqual([queued.args, queued.commit, queued.logDir, queued.version], [run.args, run.commit, run.logDir, run.version])
@@ -329,4 +334,19 @@ test('--quiet with an --events file that cannot be written leaves no log directo
   })
   assert.equal(status, 2, err)
   assert.deepEqual(readdirSync(tmp), [], 'no ci-local-selftest-logs.* directory left in TMPDIR')
+})
+
+test('a run started by a Pi session (PI_SESSION_ID) records it in its queued and run events', async () => {
+  const dir = project(["ci_step box One 'true'"])
+  const file = join(mkdtempSync(join(tmpdir(), 'ev-')), 'events.ndjson')
+  const { status, err } = await ciLocal(['--events', file], { cwd: dir, env: { PI_SESSION_ID: 'session-123' } })
+  assert.equal(status, 0, err)
+  const events = readEvents(file)
+  assert.deepEqual(
+    events.filter((event) => 'session' in event).map((event) => [event.event, event.session]),
+    [
+      ['queued', 'session-123'],
+      ['run', 'session-123'],
+    ]
+  )
 })

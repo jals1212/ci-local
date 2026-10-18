@@ -21,6 +21,9 @@ import {
   eventsFileFor,
   findProject,
   footerText,
+  launchedBy,
+  ownsRun,
+  parentPid,
   readRun,
   routeFor,
 } from '../extensions/core.js'
@@ -337,4 +340,56 @@ test('tracker.remember: a stage already shown (in the session, before a reload) 
   const running = readRun(eventsFile([queued, { ...run(), ts: ago(1) }]))
   tracker.remember(running.key, 'started')
   assert.equal(tracker.phase(running), null)
+})
+
+test('launchedBy: a run is this session’s when its process descends from this session’s process', () => {
+  // pid → parent pid: 900 is Pi; 950 the shell of a background job; 1000 the run.
+  const parents = new Map([[1000, 950], [950, 900], [900, 1], [2000, 1990], [1990, 1]])
+  const parentOf = (pid) => parents.get(pid) ?? null
+  const isAlive = (pid) => parents.has(pid) // the processes of this made-up tree, nothing else
+  assert.equal(launchedBy(1000, 900, { parentOf, isAlive }), true)
+  assert.equal(launchedBy(2000, 900, { parentOf, isAlive }), false, 'another session’s, or a terminal’s')
+  assert.equal(launchedBy(3000, 900, { parentOf, isAlive }), false, 'gone: its parents are unknown')
+  assert.equal(launchedBy(900, 900, { parentOf, isAlive }), false, 'the session itself is no run')
+})
+
+test('launchedBy: a parent chain that loops ends the walk', () => {
+  const parentOf = (pid) => ({ 10: 11, 11: 10 })[pid] ?? null
+  assert.equal(launchedBy(10, 900, { parentOf, isAlive: () => true }), false)
+})
+
+test('parentPid reads the parent of a live process, and null for one that is gone', () => {
+  assert.equal(parentPid(process.pid), process.ppid)
+  assert.equal(parentPid(deadPid()), null)
+})
+
+test('launchedBy: when the run’s parents cannot be read while it lives, the run counts as this session’s (no card is lost)', () => {
+  const alive = () => true
+  // ps failed for the live run itself: unknown, not foreign.
+  assert.equal(launchedBy(1000, 900, { parentOf: () => null, isAlive: alive }), true)
+  // ps cannot run at all (undefined): unknown, not foreign.
+  assert.equal(launchedBy(1000, 900, { parentOf: () => undefined, isAlive: alive }), true)
+  // A run that is gone has no knowable parents: not this session's.
+  assert.equal(launchedBy(1000, 900, { parentOf: () => null, isAlive: () => false }), false)
+})
+
+test('parentPid is undefined, not null, when ps cannot run', () => {
+  assert.equal(parentPid(process.pid, { ps: '/no/such/ps' }), undefined)
+})
+
+test('ownsRun: a run that names its Pi session belongs to that session alone; one that names none falls back to its process tree', () => {
+  const own = { state: { session: 'me', pid: 1 } }
+  const other = { state: { session: 'someone-else', pid: 1 } }
+  const unnamed = { state: { session: null, pid: 1 } }
+  const tree = (answer) => () => answer
+  assert.equal(ownsRun(own, { sessionId: 'me', launched: tree(false) }), true, 'its session, even orphaned')
+  assert.equal(ownsRun(other, { sessionId: 'me', launched: tree(true) }), false, 'another session’s, whatever the tree says')
+  assert.equal(ownsRun(unnamed, { sessionId: 'me', launched: tree(true) }), true, 'a background job: the tree decides')
+  assert.equal(ownsRun(unnamed, { sessionId: 'me', launched: tree(false) }), false, 'a terminal’s')
+})
+
+test('runState carries the session a run names, or null', () => {
+  const named = readRun(eventsFile([run({ session: 'me' })]))
+  assert.equal(named.state.session, 'me')
+  assert.equal(readRun(eventsFile([run()])).state.session, null)
 })

@@ -29,6 +29,7 @@ function baseEnv(cache, env) {
   const base = { ...process.env }
   delete base.CI_LOCAL_QUIET
   delete base.CI_LOCAL_EVENTS
+  delete base.PI_SESSION_ID
   delete base.CI_LOCAL_QUEUE
   delete base.CI_LOCAL_QUEUE_POLL
   // The queue in a directory of its own: never the real one.
