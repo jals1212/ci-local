@@ -101,12 +101,14 @@ function instantOf(text) {
 /**
  * True when two start time texts are the same instant, give or take
  * PID_START_TOLERANCE: the clock may be stepped (NTP) between two readings of
- * a live process. Text that is not a date is compared as it is.
+ * a live process. When either is not a date the two cannot be told apart,
+ * and they count as the same: as when ps cannot say, the pid alone decides,
+ * so a live run is never taken for gone.
  */
 export function sameStart(a, b) {
   if (a === b) return true
   const [x, y] = [instantOf(a), instantOf(b)]
-  return x !== null && y !== null && Math.abs(x - y) <= PID_START_TOLERANCE * 1000
+  return x === null || y === null || Math.abs(x - y) <= PID_START_TOLERANCE * 1000
 }
 
 /**

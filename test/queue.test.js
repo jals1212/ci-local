@@ -833,13 +833,13 @@ test('a lock whose start time is 2 s off the real one is held; 10 s off, taken o
   assert.deepEqual(readdirSync(queue2), [])
 })
 
-test('a start time that is not a date is compared as text: equal is alive, anything else gone', async () => {
+test('a start time that is not a date cannot tell: the live pid decides, its ticket is kept', async () => {
   const dir = project('proj-a', [WORK])
   const queue = scratch()
   plantTicket(queue, process.pid, { ms: 1, pidStart: 'not a date' })
-  const free = await start([], { cwd: dir, queue }).done
-  assert.equal(free.status, 0, free.err)
-  assert.doesNotMatch(free.out, /Waiting for/)
+  const waited = await start([], { cwd: dir, queue, env: { CI_LOCAL_QUEUE_TIMEOUT: '1' } }).done
+  assert.equal(waited.status, 3, waited.err)
+  assert.match(waited.err, /gave up waiting/)
 })
 
 test('a ticket or a lock with pid 0 or 1 is nobody’s: ignored and removed, taken over', async () => {

@@ -30,7 +30,8 @@ their `release x.y.z:` commit messages.
   Pi status line show the run as stopped, the next run takes over its events
   file, and its ticket and lock are ignored. Two start times count as the
   same when they are at most 3 seconds apart, so a clock stepped by NTP does
-  not make a live run look gone. Pids 0 and 1 are never a run (`kill -0 0`
+  not make a live run look gone; a start time that cannot be read as a date
+  cannot tell, so the pid alone decides. Pids 0 and 1 are never a run (`kill -0 0`
   reaches the whole process group): they count as gone. `--status` and the Pi
   status line keep a start time read from `ps` for 5 seconds instead of
   asking every second. Events and tickets without a start time (older runs)

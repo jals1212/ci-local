@@ -381,7 +381,7 @@ test('alive: a start time 2 s off the real one is the same process (the clock wa
   const start = startOf(process.pid)
   for (const seconds of [2, -2, 3, -3]) assert.equal(alive(process.pid, shifted(start, seconds)), true, `${seconds} s`)
   for (const seconds of [10, -10, 4, -4]) assert.equal(alive(process.pid, shifted(start, seconds)), false, `${seconds} s`)
-  assert.equal(alive(process.pid, 'not a date'), false, 'text that is no date: equal or gone')
+  assert.equal(alive(process.pid, 'not a date'), true, 'a start that is no date cannot tell: the pid decides')
 })
 
 test('alive and pidStart: pid 0 and 1 are nobody’s (kill 0 reaches the whole group)', () => {

@@ -917,17 +917,20 @@ PID_START_TOLERANCE=3
 # same_start RECORDED NOW: true when the two start times (the text pid_start
 # gives) are the same instant, give or take PID_START_TOLERANCE. The text is
 # parsed by perl (as event_time does; Time::Local is a core module). Text that
-# perl cannot parse, or no perl, leaves the exact string comparison.
+# perl cannot parse, or no perl, cannot tell: the same, and the pid decides.
 same_start() {
   [[ "$1" != "$2" ]] || return 0
   perl -MTime::Local=timegm -e '
     my %m; @m{qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)} = (0 .. 11);
     my @t;
     for (@ARGV[0, 1]) {
-      /^\w{3} (\w{3}) +(\d+) (\d+):(\d+):(\d+) (\d{4})$/ && exists $m{$1} or exit 1;
+      /^\w{3} (\w{3}) +(\d+) (\d+):(\d+):(\d+) (\d{4})$/ && exists $m{$1} or exit 2;
       push @t, timegm($5, $4, $3, $2, $m{$1}, $6);
     }
     exit(abs($t[0] - $t[1]) <= $ARGV[2] ? 0 : 1)' "$1" "$2" "$PID_START_TOLERANCE" 2>/dev/null
+  # 1: two dates too far apart. Anything else (a start that is no date, no
+  # perl) cannot tell them apart: the same, so the pid alone decides.
+  [[ $? -ne 1 ]]
 }
 
 # True when a process with this pid exists (ours or not: kill says EPERM for
