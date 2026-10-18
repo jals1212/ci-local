@@ -26,6 +26,9 @@ import {
   parentPid,
   readRun,
   routeFor,
+  markDelivered,
+  readDelivered,
+  staleAtStart,
 } from '../extensions/core.js'
 
 function repo(config) {
@@ -392,4 +395,27 @@ test('runState carries the session a run names, or null', () => {
   const named = readRun(eventsFile([run({ session: 'me' })]))
   assert.equal(named.state.session, 'me')
   assert.equal(readRun(eventsFile([run()])).state.session, null)
+})
+
+test('staleAtStart: a run already over when a session starts is hidden once its result was delivered, unless the extension reloads', () => {
+  const over = readRun(eventsFile([run(), { ts: ago(1000), event: 'end', result: 'passed', durationMs: 1000 }]))
+  const live = readRun(eventsFile([run()]))
+  assert.equal(staleAtStart(null, { reason: 'startup', delivered: null }), null, 'no run: nothing to hide')
+  assert.equal(staleAtStart(live, { reason: 'startup', delivered: live.key }), null, 'in flight: shown')
+  assert.equal(staleAtStart(over, { reason: 'startup', delivered: null }), null, 'never delivered (ended with no session open): shown')
+  assert.equal(staleAtStart(over, { reason: 'new', delivered: 'an|older' }), null, 'an older run was delivered, not this one: shown')
+  assert.equal(staleAtStart(over, { reason: 'startup', delivered: over.key }), over.key, 'already delivered: hidden')
+  assert.equal(staleAtStart(over, { reason: 'resume', delivered: over.key }), over.key, 'resumed, already delivered: hidden')
+  assert.equal(staleAtStart(over, { reason: 'reload', delivered: over.key }), null, 'a reload keeps what the session showed')
+})
+
+test('delivered marker: none at first, then the key of the last run whose result was shown, per events file', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'dv-')), 'myapp-ci.ndjson')
+  assert.equal(readDelivered(file), null)
+  markDelivered(file, '2025-01-01T00:00:00Z|42')
+  assert.equal(readDelivered(file), '2025-01-01T00:00:00Z|42')
+  markDelivered(file, '2025-01-02T00:00:00Z|43')
+  assert.equal(readDelivered(file), '2025-01-02T00:00:00Z|43')
+  assert.equal(readDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson')), null)
+  markDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson'), 'k') // no directory: ignored, never thrown
 })

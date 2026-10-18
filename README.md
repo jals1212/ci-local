@@ -358,7 +358,11 @@ runs ci-local or Docker itself:
 
 - **Status line**: `🚦 ◌ ci-local queued · behind erp-ci`, `🚦 ⧗ ci-local [3/8] lint · 2m05s`,
   then `🚦 ✓ ci-local passed · 4m12s` or `🚦 ✗ ci-local failed at lint · 2m10s` until
-  the next run. Pi shows it in the footer. A shell that draws its own chrome
+  the next run. A run already over when a session starts shows only while its
+  result is undelivered, like an unread message: it ended with no session of
+  the repository open. Once a session has shown it finished, a later session
+  (new or resumed) leaves it out; the marker is `<events file>.delivered`. A
+  run in flight, and every later one, shows. Pi shows it in the footer. A shell that draws its own chrome
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).

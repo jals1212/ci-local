@@ -3,7 +3,7 @@
 // rendering and the states are those of `ci-local --status` (status.js).
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
 import { BRAND, GLYPHS, alive, duration, lastRun, render, runState } from '../status.js'
@@ -137,6 +137,49 @@ export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = aliv
     current = parentOf(current)
   }
   return false
+}
+
+/**
+ * The key of the run the status line leaves out in a session that has just
+ * started, or null. A run already over then is shown only while its result
+ * is still undelivered: no session showed it finished (it ended with every
+ * session of the repository closed). Once delivered it is old news, in a new
+ * session or a resumed one, except on a reload (the session already showed
+ * it). A run in flight is shown, and so is every run after it.
+ */
+export function staleAtStart(run, { reason, delivered } = {}) {
+  if (!run || !FINISHED.has(run.state.state) || reason === 'reload') return null
+  return run.key === delivered ? run.key : null
+}
+
+/** The marker of the last run whose result a session showed: next to its events file. */
+const deliveredFile = (file) => `${file}.delivered`
+
+/** The key of the last run whose result was delivered (shown finished), or null. */
+export function readDelivered(file) {
+  try {
+    return readFileSync(deliveredFile(file), 'utf8').trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Records that the result of run `key` was delivered. Written whole (a
+ * temporary file, then a rename); a failure is ignored: the result is then
+ * shown once more, never lost.
+ */
+export function markDelivered(file, key) {
+  const target = deliveredFile(file)
+  const temporary = `${target}.${process.pid}.tmp`
+  try {
+    writeFileSync(temporary, `${key}\n`, { mode: 0o600 })
+    renameSync(temporary, target)
+  } catch {
+    try {
+      rmSync(temporary, { force: true })
+    } catch {}
+  }
 }
 
 /** One short line for the footer. */
