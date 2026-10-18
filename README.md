@@ -68,7 +68,7 @@ version its config and its parity test were written for, `npx ci-local` (or
 `@jals1212/ci-local/parity` from the repository's own `node_modules`. A global
 install would run one version for every repository.
 
-The [Pi package](#in-pi-footer-end-card-and-agent-skill) is the exception: it
+The [Pi package](#in-pi-status-line-end-card-and-agent-skill) is the exception: it
 only reads the events each run writes, so it is installed once, for Pi, with
 `pi install npm:@jals1212/ci-local`.
 
@@ -330,7 +330,7 @@ real directory of yours that no one else can write (a symlink, another
 user's, or group- or world-writable): it says so, and that run neither
 queues nor writes events. `--status` refuses it too (status 2).
 
-## In Pi: footer, end card and agent skill
+## In Pi: status line, end card and agent skill
 
 The package is also a [Pi](https://pi.dev) package. Install it once, for every
 repository:
@@ -343,20 +343,32 @@ In a session opened inside a repository with `ci-local.config.sh` (with a
 literal `CI_PROJECT=`), it follows the events file of that project; it never
 runs ci-local or Docker itself:
 
-- **Footer**: `⏳ ci-local queued · behind erp-ci`, `🐳 ci-local [3/8] lint · 2m05s`,
+- **Status line**: `⏳ ci-local queued · behind erp-ci`, `🐳 ci-local [3/8] lint · 2m05s`,
   then `✅ ci-local passed · 4m12s` or `❌ ci-local failed at lint · 2m10s` until
-  the next run.
+  the next run. Pi shows it in the footer. A shell that draws its own chrome
+  shows it where it lists extension statuses: Gentle Shell, for one, under
+  **Integrations** in the sidebar's Status card (or in its bottom bar on a
+  narrow terminal).
+- **When a run starts**: a card in the transcript (`🐳 ci-local · running …`),
+  for you only: it is a session entry and never reaches the model.
 - **When a run the session saw in flight ends**: a notification at once, and
-  a card in the transcript with the `--status` block once the run's process
-  has exited (its cleanup, then its exit; 10 seconds at most). The card says
-  it comes from the extension, and reaches the agent:
-  - **busy**: within its current work (`steer`), not once the whole task is
-    over. A run started as a background job then reaches the agent in the
-    same turn as that job's own exit notice;
-  - **idle**: it wakes the agent, which acts on the result. That costs a
-    turn per run the session saw.
+  a card in the transcript with the `--status` block. The card says it comes
+  from the extension, and reaches the agent the way Gentle AI hands a
+  subagent's result to its parent:
+  - **idle**: the card is stored in the conversation at once, without a
+    turn; then one hidden message wakes the agent, 2 seconds after the run's
+    process has exited (10 seconds after the card at most). When the run was
+    started as a background job, that job's own exit notice usually wakes
+    the agent first, and the card is already there: one reply covers both,
+    and ci-local sends no wake;
+  - **in a run** (busy): the card is steered in before its next model call,
+    not once the whole task is over;
+  - **busy without a run** (compacting): the card waits until the agent can
+    take it.
 
-  A run already over when the session starts is not announced.
+  A delivery that fails is tried again (every 30 seconds, 3 times, then at
+  the next turn boundary), never dropped. A run already over when the
+  session starts is not announced.
 - **Tool `ci_local_status`**: the same three lines for the agent, without a
   shell.
 - **Skill `ci-local`**: how an agent runs and waits for ci-local (in the

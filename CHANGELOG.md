@@ -59,11 +59,18 @@ their `release x.y.z:` commit messages.
   `ci-local --status` says so and exits 2 instead of showing one.
 - With `--quiet`, an `--events` file that cannot be written (status 2) no
   longer leaves an empty step-log directory in `TMPDIR`.
-- The Pi end card wakes an idle agent and reaches a busy one within its
-  current work (`steer`, not a follow-up that waits for the whole task). It
-  is sent once the run's process has exited (10 seconds at most), so a run
-  started as a background job reaches the agent in the same turn as that
-  job's exit notice. The notification is still shown at once.
+- The Pi end card reaches the agent as Gentle AI hands a subagent's result
+  to its parent: an idle agent gets it stored at once, without a turn, and
+  one hidden wake 2 seconds after the run's process has exited, so a run
+  started as a background job is covered by one reply with that job's exit
+  notice; an agent in a run gets it steered in before its next model call;
+  busy without a run (compacting) it waits. A delivery that fails is retried
+  (every 30 seconds, 3 times, then at the next turn boundary), never
+  dropped.
+- A Pi start card: when a run starts, a card in the transcript for the user
+  only (a session entry, never in the model's context).
+- README: where the Pi status line shows (Pi's footer; Gentle Shell's
+  sidebar, under Integrations).
 - `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.
 - The Pi end card tells the model it comes from the ci-local extension;
   without that line a model took the bare block for a message from the
