@@ -1,0 +1,41 @@
+{
+  "name": "@jals1212/ci-local-pi",
+  "version": "0.1.0",
+  "description": "Pi extension and skill for @jals1212/ci-local: the state of this repository's ci-local run in Pi's status line, cards and a read-only tool for the agent.",
+  "license": "MIT",
+  "author": "jals1212",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jals1212/ci-local.git",
+    "directory": "pi"
+  },
+  "homepage": "https://github.com/jals1212/ci-local/tree/main/pi#readme",
+  "bugs": "https://github.com/jals1212/ci-local/issues",
+  "keywords": ["pi-package", "pi", "ci", "github-actions", "docker", "local", "ci-local"],
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions/ci-local.ts"],
+    "skills": ["./skills"]
+  },
+  "files": ["extensions", "skills", "README.md", "CHANGELOG.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@jals1212/ci-local": "^0.7.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@earendil-works/pi-tui": { "optional": true },
+    "typebox": { "optional": true }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

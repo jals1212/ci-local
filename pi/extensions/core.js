@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
-import { BRAND, GLYPHS, alive, duration, lastRun, render, runState } from '../status.js'
+import { BRAND, GLYPHS, alive, duration, lastRun, render, runState } from '@jals1212/ci-local/status'
 
 const PROJECT_LINE = /^\s*CI_PROJECT=(?:"([a-z0-9][a-z0-9_-]*)"|'([a-z0-9][a-z0-9_-]*)'|([a-z0-9][a-z0-9_-]*))\s*(?:#.*)?$/
 

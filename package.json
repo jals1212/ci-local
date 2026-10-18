@@ -26,30 +26,22 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["bin", "docker", "extensions", "skills", "parity.js", "parity.d.ts", "status.js", "status.d.ts", "CHANGELOG.md"],
+  "files": ["bin", "docker", "pi/bridge.ts", "pi/extensions", "pi/skills", "parity.js", "parity.d.ts", "status.js", "status.d.ts", "CHANGELOG.md"],
   "pi": {
-    "extensions": ["./extensions/ci-local.ts"],
-    "skills": ["./skills"]
+    "extensions": ["./pi/bridge.ts"],
+    "skills": ["./pi/skills"]
   },
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "prepare": "node scripts/link-self.mjs",
+    "pretest": "node scripts/link-self.mjs",
+    "test": "node --test test/*.test.js pi/test/*.test.js",
     "lint": "shellcheck bin/ci-local test/fixture/ci-local.config.sh"
   },
   "dependencies": {
     "yaml": "^2.8.0"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": { "optional": true },
-    "@earendil-works/pi-tui": { "optional": true },
-    "typebox": { "optional": true }
   },
   "publishConfig": {
     "access": "public",
