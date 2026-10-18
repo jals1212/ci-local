@@ -59,6 +59,7 @@ their `release x.y.z:` commit messages.
   `ci-local --status` says so and exits 2 instead of showing one.
 - With `--quiet`, an `--events` file that cannot be written (status 2) no
   longer leaves an empty step-log directory in `TMPDIR`.
+- `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.
 - The Pi end card tells the model it comes from the ci-local extension;
   without that line a model took the bare block for a message from the
   user. The transcript shows the card as before.

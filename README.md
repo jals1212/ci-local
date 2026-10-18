@@ -460,7 +460,7 @@ on your machine, with `set -e` in force. Options:
 | `CI_LOCAL_EVENTS` | A file: as `--events FILE`. `off`, `0`, `false` or `no`: no events file at all. |
 | `CI_LOCAL_QUEUE` | `off`, `0`, `false` or `no`: no queue; runs may overlap. |
 | `CI_LOCAL_QUEUE_DIR` | The queue directory (absolute). Default: `<cache>/ci-local/queue`. |
-| `CI_LOCAL_QUEUE_POLL` | Seconds between two looks at the queue while waiting. Default: `2`. |
+| `CI_LOCAL_QUEUE_POLL` | Seconds between two looks at the queue while waiting, above 0. Default: `2`. |
 | `XDG_CACHE_HOME`, `HOME`, `TMPDIR` | Where `<cache>` is: `$XDG_CACHE_HOME`, else `$HOME/.cache`, else `$TMPDIR/ci-local-<uid>`. |
 
 Set in the environment, `CI_LOCAL_QUIET` and `CI_LOCAL_EVENTS` are a standing

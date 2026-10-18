@@ -665,3 +665,29 @@ test('in the TMPDIR fallback, a ci-local directory inside that others can write 
   assert.deepEqual(readdirSync(join(base, 'ci-local')), [], 'nothing written there')
   assert.equal(existsSync(join(dir, 'ran')), true)
 })
+
+test('CI_LOCAL_QUEUE_POLL of 0 (or anything not above 0) falls back to 2 seconds: no busy loop while waiting', async () => {
+  for (const poll of ['0', '0.0']) {
+    const queue = scratch('queue-')
+    const dirA = project('proj-a', [GATE])
+    const dirB = project('proj-b', [WORK])
+    const a = start([], { cwd: dirA, queue })
+    await until(() => existsSync(join(dirA, 'started')))
+    // B under a shell that reports, with `times`, the CPU its children used:
+    // the waiting run and every process it starts.
+    const base = { ...process.env, XDG_CACHE_HOME: scratch('cache-'), CI_LOCAL_QUEUE_DIR: queue, CI_LOCAL_QUEUE_POLL: poll, PATH: `${FAKE_DOCKER}:${process.env.PATH}` }
+    const b = spawn('bash', ['-c', 'bash "$0"; times', BIN], { cwd: dirB, env: base })
+    children.push(b)
+    let out = ''
+    b.stdout.on('data', (chunk) => (out += chunk))
+    const doneB = new Promise((resolve) => b.on('close', resolve))
+    await until(() => out.includes('Waiting for '))
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    release(dirA)
+    assert.equal((await a.done).status, 0)
+    await doneB
+    const seconds = (text) => text.split(/\s+/).reduce((sum, t) => sum + Number(t.replace(/^(\d+)m([\d.]+)s$/, (_, m, sec) => String(Number(m) * 60 + Number(sec)))), 0)
+    const childrenCpu = seconds(out.trim().split('\n').at(-1))
+    assert.ok(childrenCpu < 1, `CI_LOCAL_QUEUE_POLL=${poll}: the waiting run used ${childrenCpu}s of CPU (a busy loop)`)
+  }
+})

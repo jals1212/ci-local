@@ -506,7 +506,8 @@ case "${CI_LOCAL_QUIET:-}" in '' | 0 | false) ;; *) QUIET=1 ;; esac
 QUEUE=1
 case "${CI_LOCAL_QUEUE:-}" in 0 | off | false | no) QUEUE=0 ;; esac
 QUEUE_POLL="${CI_LOCAL_QUEUE_POLL:-2}" # seconds between two looks at the queue
-[[ "$QUEUE_POLL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || QUEUE_POLL=2
+# A number above 0: with 0 the wait would be a busy loop.
+[[ "$QUEUE_POLL" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$QUEUE_POLL" =~ ^0*(\.0*)?$ ]] || QUEUE_POLL=2
 EVENTS="${CI_LOCAL_EVENTS:-}"
 # Without --events a run writes to the default file (see DEFAULT_EVENTS);
 # CI_LOCAL_EVENTS=off writes none.
