@@ -1,6 +1,6 @@
 {
   "name": "@jals1212/ci-local",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Run a Node project's GitHub Actions workflow steps on your machine, in Linux, without touching your development stack, with parity checks that keep the two in step.",
   "license": "MIT",
   "author": "jals1212",
@@ -22,7 +22,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["bin", "docker", "parity.js", "parity.d.ts", "CHANGELOG.md"],
+  "files": ["bin", "docker", "parity.js", "parity.d.ts", "status.js", "CHANGELOG.md"],
   "engines": {
     "node": ">=20"
   },

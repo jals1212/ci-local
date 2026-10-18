@@ -108,6 +108,7 @@ npx ci-local --keep           # leave everything up to look at it
 npx ci-local --down           # remove what --keep left
 npx ci-local --quiet          # step output to log files, milestones only
 npx ci-local --events run.ndjson  # one JSON line per milestone, to follow
+npx ci-local --status         # the last run: running, passed, failed or stopped
 ```
 
 `npx ci-local --help` has the rest (`--skip TAGS`, `--rebuild`,
@@ -135,8 +136,9 @@ last 40 lines of its log. The log directory is printed at the start and left
 in place after the run:
 
 ```text
-ci-local 0.3.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+ci-local 0.4.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 Step output: /tmp/myapp-ci-logs.Xa81Qe
+Events: /home/me/.cache/ci-local/myapp-ci.ndjson (ci-local --status)
 
 ==> [1/12] Build the runner image
 <== Build the runner image: ok (0s)
@@ -148,6 +150,11 @@ every milestone, for another terminal or a status display. The file is emptied
 when the run starts; a relative path is taken from where you run ci-local. A
 file that cannot be written stops the run before any step, with status 2.
 
+Without `--events`, a run writes its events to
+`~/.cache/ci-local/<project>.ndjson` (`$XDG_CACHE_HOME/ci-local/` when that is
+set), names it at the start, and goes on with a warning if it cannot write
+there. `CI_LOCAL_EVENTS=off` writes no events file.
+
 Put the file outside the checkout (inside, it is an uncommitted change in the
 summary) and in a directory only you can write: emptying a fixed name in a
 shared `/tmp` follows whatever another user left there under that name.
@@ -158,11 +165,11 @@ Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
-| `run` | the steps are about to run | `project`, `jobs`, `total` |
-| `start` | a step starts | `step`, `index` (from 1), `total` |
-| `ok` | a step passed | `step`, `index`, `total`, `durationMs` |
-| `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs` |
-| `end` | after the cleanup | `result` (`passed`, `failed`, `interrupted`), `durationMs` |
+| `run` | the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (`--quiet`; else `null`) |
+| `start` | a step starts | `step`, `index` (from 1), `total`; `log` with `--quiet` |
+| `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` with `--quiet` |
+| `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` with `--quiet` |
+| `end` | after the cleanup | `result` (`passed`, `failed`, `interrupted`), `devStack` (`untouched`, `changed`, `none`), `durationMs` |
 
 ```sh
 # terminal 1
@@ -186,6 +193,36 @@ tail -f ~/.cache/ci-local/myapp-ci.ndjson |
 To wait for a run without reading it, wait for the `end` event, or for the
 process to exit and read its summary: its status and the `PASSED:` /
 `FAILED at step:` line are the same in every mode.
+
+### The state of the last run: `--status`
+
+`ci-local --status` reads the events file (the default one, or the one named
+with `--events`, which then needs no config) and prints three lines of
+Markdown, ready to paste in a chat or a pull request, while the run goes on
+and after it ends. It needs no Docker and changes nothing.
+
+```text
+> 🐳 **ci-local** · running · [9/12] pnpm run test:integration
+> `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de` · 6m41s so far
+> Follow it: `tail -f /home/me/.cache/ci-local/myapp-ci.ndjson` · step output: `/tmp/myapp-ci-logs.Xa81Qe`
+
+> ✅ **ci-local** · passed
+> `ci-local` · project `myapp-ci` · `3f2a91c0b7de`
+> 12 steps · 9m03s · every step passed · Development stack untouched.
+
+> ❌ **ci-local** · failed
+> `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de`
+> Failed at: pnpm run lint (step 5/12, exit 1) · 2m10s · log: `/tmp/myapp-ci-logs.Xa81Qe/05-pnpm-run-lint.log`.
+
+> ⚠️ **ci-local** · stopped
+> `ci-local` · project `myapp-ci` · `3f2a91c0b7de`
+> No end: process 48213 is gone (killed, or Docker froze) · during: pnpm test (step 8/12).
+```
+
+A run with no `end` event is `running` while its process lives, `stopped` once
+it is gone. Exit status: 0 passed, 1 failed, 2 no run recorded, 3 running,
+4 stopped (interrupted, or gone without an end), so a script can wait with
+`while ci-local --status >/dev/null; [ $? -eq 3 ]; do sleep 10; done`.
 
 ## The parity test
 
