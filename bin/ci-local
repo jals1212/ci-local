@@ -627,9 +627,13 @@ private_dir() {
 # never used, for events or for the queue. One planted after this check is
 # caught by make_cache_dir, which in the fallback checks both directories
 # again once they exist, before anything is written in them.
+# Said only where it matters: --status (which has nothing to read) and a real
+# run. --list, --print-plan and --down use neither events nor queue, so the
+# warning is kept in CACHE_REFUSED and printed when a run is about to start.
+CACHE_REFUSED=""
 if [[ $CACHE_BASE_PRIVATE -eq 1 ]] && { [[ -L "$CACHE_BASE" ]] || { [[ -e "$CACHE_BASE" ]] && ! private_dir "$CACHE_BASE"; }; }; then
-  echo "ci-local: $CACHE_BASE is not a private directory of this user: no events file, no queue" >&2
-  [[ $STATUS -eq 0 ]] || exit 2
+  CACHE_REFUSED="ci-local: $CACHE_BASE is not a private directory of this user: no events file, no queue"
+  [[ $STATUS -eq 0 ]] || { echo "$CACHE_REFUSED" >&2; exit 2; }
   EVENTS_OFF=1
   QUEUE=0
 fi
@@ -722,6 +726,9 @@ if [[ $DOWN_ONLY -eq 1 ]]; then
   echo "Removed what project $CI_PROJECT left."
   exit 0
 fi
+
+# A run is next: now the refused cache is worth saying.
+[[ -z "$CACHE_REFUSED" ]] || echo "$CACHE_REFUSED" >&2
 
 [[ "$(type -t ci_preflight)" != function ]] || ci_preflight
 
@@ -953,6 +960,15 @@ queue_lock() {
       [[ "$mtime" =~ ^[0-9]+$ && $(($(date +%s) - mtime)) -gt 10 ]] || return 1
     fi
     # Stale: moved away whole (a half-removed lock must not be seen), then removed.
+    # This is check-then-move: between reading lock/pid and the mv, another run
+    # could in principle replace the lock with a live one, and the mv would take
+    # it. That cannot happen today: only the run whose ticket is the first live
+    # one gets here (queue_poll returns early for the others while AHEAD > 0),
+    # tickets are totally ordered by name, and the lock holder keeps its ticket
+    # until after it releases the lock, so no second run is first while a lock
+    # is held. A change that lets two runs try the lock at once (a priority
+    # lane, locking without tickets) needs a compare-and-move here: move the
+    # lock, check the moved pid is the one read, put it back if not.
     mv "$lock" "$QUEUE_DIR/.stale.$$" 2>/dev/null && rm -rf "$QUEUE_DIR/.stale.$$"
   done
   return 1
