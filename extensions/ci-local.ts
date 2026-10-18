@@ -3,10 +3,10 @@
 //
 // - Footer: `🐳 ci-local [3/8] lint · 2m05s`, `⏳ queued · behind erp-ci`,
 //   then `✅ passed · 4m12s` / `❌ failed at lint` until the next run.
-// - When a run this session saw in flight ends: a notification and a card in
-//   the transcript (the --status block). The card reaches the agent: as a
-//   follow-up when it is busy (it reacts), with your next message when idle
-//   (no turn is spent).
+// - When a run this session saw in flight ends: a notification at once, and a
+//   card in the transcript (the --status block) once the run's process has
+//   exited. The card reaches the agent within its current work when it is
+//   busy (steer), and wakes it when it is idle.
 // - Tool `ci_local_status`: the same three lines, for the agent, without bash.
 //
 // It reads the events file each run writes (see README, "Following a run");
@@ -16,7 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { Box, Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 
-import { cardContent, createTracker, eventsFileFor, findProject, footerText, readRun } from './core.js'
+import { cardContent, createCardQueue, createTracker, deliveryFor, eventsFileFor, findProject, footerText, readRun } from './core.js'
 
 const KEY = 'ci-local'
 const POLL_MS = 1000
@@ -74,6 +74,7 @@ export default function ciLocal(pi: ExtensionAPI) {
     const file = eventsFileFor(found.project, process.env, found.repo)
     if (!file) return // CI_LOCAL_EVENTS=off, or no private cache: runs write no events
     const tracker = createTracker()
+    const cards = createCardQueue()
     let shown: string | undefined
 
     const tick = () => {
@@ -88,18 +89,24 @@ export default function ciLocal(pi: ExtensionAPI) {
         ctx.ui.setStatus(KEY, footer)
         shown = footer
       }
-      if (!tracker.observe(run)) return
-      const state = run.state.state
-      ctx.ui.notify(
-        `ci-local ${state} · ${found.project}`,
-        state === 'passed' ? 'info' : state === 'failed' ? 'error' : 'warning'
-      )
-      const card = { customType: KEY, content: cardContent(run.block, found.project), display: true, details: { state, lines: run.block.lines } }
-      // Idle: appended and shown now, in the context of the next turn, no turn
-      // spent ('nextTurn' would hide it until then). Busy: a follow-up the
-      // agent handles when its current work settles.
-      if (ctx.isIdle()) pi.sendMessage(card)
-      else pi.sendMessage(card, { deliverAs: 'followUp' })
+      if (tracker.observe(run)) {
+        const state = run.state.state
+        ctx.ui.notify(
+          `ci-local ${state} · ${found.project}`,
+          state === 'passed' ? 'info' : state === 'failed' ? 'error' : 'warning'
+        )
+        cards.add(run)
+      }
+      // The card, once the run's process has exited (see createCardQueue).
+      const ended = cards.take()
+      if (!ended) return
+      const card = {
+        customType: KEY,
+        content: cardContent(ended.block, found.project),
+        display: true,
+        details: { state: ended.state.state, lines: ended.block.lines },
+      }
+      pi.sendMessage(card, deliveryFor(ctx.isIdle()))
     }
 
     tick()

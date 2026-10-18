@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { cardContent, createTracker, eventsFileFor, findProject, footerText, readRun } from '../extensions/core.js'
+import { cardContent, createCardQueue, createTracker, deliveryFor, eventsFileFor, findProject, footerText, readRun } from '../extensions/core.js'
 
 function repo(config) {
   const dir = mkdtempSync(join(tmpdir(), 'pi-ext-'))
@@ -164,4 +164,48 @@ test('cardContent tells the model where the card comes from, then gives the bloc
   const [first, ...rest] = content.split('\n')
   assert.equal(first, 'The ci-local Pi extension: a run of p-ci you saw start has ended (this is not a message from the user).')
   assert.deepEqual(rest, ['', ...block.lines])
+})
+
+test('deliveryFor: an idle agent is woken for the card; a busy one gets it within its current work', () => {
+  assert.deepEqual(deliveryFor(true), { triggerTurn: true })
+  assert.deepEqual(deliveryFor(false), { deliverAs: 'steer' })
+})
+
+test('the card queue holds an ended run until its process exits, or 10 seconds at most', () => {
+  let clock = 1_000
+  const living = new Set([42])
+  const queue = createCardQueue({ isAlive: (pid) => living.has(pid), now: () => clock })
+  const run = { state: { pid: 42, state: 'passed' } }
+
+  assert.equal(queue.take(), null, 'nothing queued')
+  queue.add(run)
+  assert.equal(queue.take(), null, 'process 42 still finishing (cleanup, exit): wait')
+  clock += 3_000
+  assert.equal(queue.take(), null)
+  living.delete(42)
+  assert.equal(queue.take(), run, 'gone: deliver')
+  assert.equal(queue.take(), null, 'once')
+
+  queue.add(run)
+  living.add(42) // a process that never seems to exit (or a reused pid)
+  clock += 9_999
+  assert.equal(queue.take(), null)
+  clock += 1
+  assert.equal(queue.take(), run, 'at 10 seconds, deliver anyway')
+})
+
+test('the card queue keeps every ended run, in order: a second end never drops the first card', () => {
+  const clock = 1_000
+  const living = new Set([1, 2])
+  const queue = createCardQueue({ isAlive: (pid) => living.has(pid), now: () => clock })
+  const first = { state: { pid: 1, state: 'failed' } }
+  const second = { state: { pid: 2, state: 'passed' } }
+  queue.add(first)
+  queue.add(second)
+  living.delete(2) // the second run's process is gone first
+  assert.equal(queue.take(), null, 'the first card still waits for its run: order is kept')
+  living.delete(1)
+  assert.equal(queue.take(), first)
+  assert.equal(queue.take(), second)
+  assert.equal(queue.take(), null)
 })

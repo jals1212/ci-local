@@ -59,6 +59,11 @@ their `release x.y.z:` commit messages.
   `ci-local --status` says so and exits 2 instead of showing one.
 - With `--quiet`, an `--events` file that cannot be written (status 2) no
   longer leaves an empty step-log directory in `TMPDIR`.
+- The Pi end card wakes an idle agent and reaches a busy one within its
+  current work (`steer`, not a follow-up that waits for the whole task). It
+  is sent once the run's process has exited (10 seconds at most), so a run
+  started as a background job reaches the agent in the same turn as that
+  job's exit notice. The notification is still shown at once.
 - `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.
 - The Pi end card tells the model it comes from the ci-local extension;
   without that line a model took the bare block for a message from the
