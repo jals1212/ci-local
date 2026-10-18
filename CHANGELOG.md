@@ -37,6 +37,13 @@ their `release x.y.z:` commit messages.
   waits for changes (`project`, `version`, `pid`, `commit`, `args`, `logDir`,
   `ahead`, `blockedBy`), so `--status` never has a gap before the `run` event.
   `--status` shows `queued` (⏳) and `starting` (🐳), both with exit status 3.
+- A Pi package (`pi install npm:@jals1212/ci-local`): an extension that shows
+  the run of the session's repository in the footer (queued, running with its
+  step, then the result), notifies when a run it saw in flight ends and puts
+  the `--status` block in the transcript (a follow-up for a busy agent, plain
+  context for an idle one), plus a `ci_local_status` tool; and a `ci-local`
+  skill with the rules for running and waiting on ci-local, without any
+  branch policy. The Pi dependencies are optional peers.
 
 ### Changed
 
