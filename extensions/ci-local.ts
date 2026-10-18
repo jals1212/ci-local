@@ -3,8 +3,9 @@
 //
 // - Footer: `🐳 ci-local [3/8] lint · 2m05s`, `⏳ queued · behind erp-ci`,
 //   then `✅ passed · 4m12s` / `❌ failed at lint` until the next run.
-// - When a run starts: a card in the transcript, for you only (a session
-//   entry, never in the model's context).
+// - When a run starts: a card in the transcript when it is starting (or
+//   waiting for its turn), another when its steps start; for you only (session
+//   entries, never in the model's context, never repeated after a reload).
 // - When a run this session saw in flight ends: a notification at once, and a
 //   card in the transcript (the --status block). It reaches the agent as
 //   Gentle AI hands content to a parent: an idle agent gets it stored at once
@@ -41,6 +42,8 @@ const WAKE_KEY = 'ci-local-wake'
 const POLL_MS = 1000
 
 type Card = { state: string; lines: string[] }
+/** A start card: the run, its stage ('starting', then 'started'), the --status block. */
+type StartCard = { key: string; phase: 'starting' | 'started'; lines: string[] }
 
 export default function ciLocal(pi: ExtensionAPI) {
   let timer: ReturnType<typeof setInterval> | undefined
@@ -61,7 +64,7 @@ export default function ciLocal(pi: ExtensionAPI) {
   pi.on('session_compact', async () => delivery?.boundary())
   pi.on('session_compact_failed', async () => delivery?.boundary())
 
-  pi.registerEntryRenderer<{ lines: string[] }>(START_KEY, (entry, _options, theme) => {
+  pi.registerEntryRenderer<StartCard>(START_KEY, (entry, _options, theme) => {
     const lines = (entry.data?.lines ?? []).map((line) => line.replace(/^> ?/, '').replaceAll('**', ''))
     const text = [theme.fg('accent', theme.bold(lines[0] ?? 'ci-local')), ...lines.slice(1).map((line) => theme.fg('dim', line))]
     const box = new Box(1, 1, (t: string) => theme.bg('customMessageBg', t))
@@ -118,6 +121,13 @@ export default function ciLocal(pi: ExtensionAPI) {
     const file = eventsFileFor(found.project, process.env, found.repo)
     if (!file) return // CI_LOCAL_EVENTS=off, or no private cache: runs write no events
     const tracker = createTracker()
+    // Start cards this session already shows (a reload, a resumed session): not again.
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === 'custom' && entry.customType === START_KEY) {
+        const data = entry.data as StartCard | undefined
+        if (data?.key && data.phase) tracker.remember(data.key, data.phase)
+      }
+    }
     const ends = createDelivery()
     delivery = ends
     let shown: string | undefined
@@ -134,9 +144,10 @@ export default function ciLocal(pi: ExtensionAPI) {
         ctx.ui.setStatus(KEY, footer)
         shown = footer
       }
-      if (tracker.started(run)) {
+      const phase = tracker.phase(run)
+      if (phase) {
         try {
-          pi.appendEntry(START_KEY, { lines: run.block.lines })
+          pi.appendEntry<StartCard>(START_KEY, { key: run.key, phase, lines: run.block.lines })
         } catch {
           // A start card is for show: never a reason to stop following the run.
         }

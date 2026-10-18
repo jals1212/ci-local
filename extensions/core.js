@@ -137,7 +137,7 @@ export function cardContent(block, project) {
  */
 export function createTracker() {
   const inFlight = new Set()
-  const seen = new Set()
+  const shown = new Set() // `${key}#${phase}` of every start card shown
   return {
     observe(run) {
       if (!run) return false
@@ -147,11 +147,22 @@ export function createTracker() {
       }
       return inFlight.delete(run.key)
     },
-    /** True once, the first time a run is seen in flight (for the start card). */
-    started(run) {
-      if (!run || FINISHED.has(run.state.state) || seen.has(run.key)) return false
-      seen.add(run.key)
-      return true
+    /**
+     * The start card a run is due, once each: 'starting' while it waits for its
+     * turn or starts, then 'started' once it runs its steps; null otherwise. A
+     * run first seen already running is due 'started' only.
+     */
+    phase(run) {
+      if (!run || FINISHED.has(run.state.state)) return null
+      const due = run.state.state === 'running' ? 'started' : 'starting'
+      const key = `${run.key}#${due}`
+      if (shown.has(key) || (due === 'starting' && shown.has(`${run.key}#started`))) return null
+      shown.add(key)
+      return due
+    },
+    /** A start card already in the session (before a reload): not shown again. */
+    remember(key, phase) {
+      shown.add(`${key}#${phase}`)
     },
   }
 }

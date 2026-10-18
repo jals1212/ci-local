@@ -67,8 +67,9 @@ their `release x.y.z:` commit messages.
   busy without a run (compacting) it waits. A delivery that fails is retried
   (every 30 seconds, 3 times, then at the next turn boundary), never
   dropped.
-- A Pi start card: when a run starts, a card in the transcript for the user
-  only (a session entry, never in the model's context).
+- Pi start cards: when a run is starting (or waiting for its turn) and when
+  its steps start, a card in the transcript for the user only (session
+  entries, never in the model's context, not repeated after a reload).
 - README: where the Pi status line shows (Pi's footer; Gentle Shell's
   sidebar, under Integrations).
 - `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.

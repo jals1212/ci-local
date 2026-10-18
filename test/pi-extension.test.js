@@ -302,13 +302,39 @@ test('a delivery that failed is tried again first, every CARD_RETRY_MS, CARD_RET
   assert.equal(d.next(IDLE).run.state.pid, 2)
 })
 
-test('the tracker reports a start once, for a run first seen in flight', () => {
+const queuedEvent = (fields = {}) => ({ ...run(fields), event: 'queued', ahead: 1, blockedBy: { project: 'other-ci', pid: process.pid } })
+
+test('tracker.phase: starting once while the run waits or starts, started once when it runs, nothing at the end', () => {
   const tracker = createTracker()
-  const same = run()
-  const running = readRun(eventsFile([same]))
-  assert.equal(tracker.started(running), true)
-  assert.equal(tracker.started(running), false, 'once')
-  const over = readRun(eventsFile([same, { ts: ago(1), event: 'end', result: 'passed', durationMs: 1 }]))
-  assert.equal(createTracker().started(over), false, 'a run already over is no start')
-  assert.equal(tracker.started(null), false)
+  const queued = queuedEvent()
+  const waiting = readRun(eventsFile([queued]))
+  assert.equal(waiting.state.state, 'queued')
+  assert.equal(tracker.phase(waiting), 'starting')
+  assert.equal(tracker.phase(waiting), null, 'once')
+  const running = readRun(eventsFile([queued, { ...run(), ts: ago(1) }]))
+  assert.equal(running.state.state, 'running')
+  assert.equal(running.key, waiting.key, 'one run, one key')
+  assert.equal(tracker.phase(running), 'started')
+  assert.equal(tracker.phase(running), null, 'once')
+  const over = readRun(eventsFile([queued, { ...run(), ts: ago(1) }, { ts: ago(1), event: 'end', result: 'passed', durationMs: 1 }]))
+  assert.equal(tracker.phase(over), null, 'the end is the end card, not a start card')
+  assert.equal(tracker.phase(null), null)
+})
+
+test('tracker.phase: a run first seen already running gets only started', () => {
+  const tracker = createTracker()
+  const running = readRun(eventsFile([run()]))
+  assert.equal(tracker.phase(running), 'started')
+  assert.equal(tracker.phase(running), null)
+})
+
+test('tracker.remember: a stage already shown (in the session, before a reload) is not shown again', () => {
+  const tracker = createTracker()
+  const queued = queuedEvent()
+  const waiting = readRun(eventsFile([queued]))
+  tracker.remember(waiting.key, 'starting')
+  assert.equal(tracker.phase(waiting), null)
+  const running = readRun(eventsFile([queued, { ...run(), ts: ago(1) }]))
+  tracker.remember(running.key, 'started')
+  assert.equal(tracker.phase(running), null)
 })

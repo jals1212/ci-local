@@ -349,8 +349,11 @@ runs ci-local or Docker itself:
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).
-- **When a run starts**: a card in the transcript (`🐳 ci-local · running …`),
-  for you only: it is a session entry and never reaches the model.
+- **When a run starts**: a card in the transcript when it is starting, or
+  waiting for its turn (`⏳ ci-local · queued · behind erp-ci`), and another
+  when its steps start (`🐳 ci-local · running · [1/14] …`). They are for you
+  only: session entries, never in the model's context, and not shown again
+  after a reload.
 - **When a run the session saw in flight ends**: a notification at once, and
   a card in the transcript with the `--status` block. The card says it comes
   from the extension, and reaches the agent the way Gentle AI hands a
