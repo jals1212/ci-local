@@ -161,7 +161,7 @@ test('two runs: the second waits for the first’s end, says whom it waits for, 
     assert.ok(at(evB, 'run') >= at(evA, 'end'))
     assert.match(b.out, /\nQueue: your turn after \d+s\n/)
     assert.doesNotMatch(a.out, /Waiting for |Queue: your turn/)
-    assert.ok(b.out.indexOf('Queue: your turn') < b.out.indexOf('ci-local 0.4.0: 1 steps'), 'before the banner')
+    assert.ok(b.out.indexOf('Queue: your turn') < b.out.search(/ci-local \d+\.\d+\.\d+: 1 steps/), 'before the banner')
     // queued: what B saw when it queued, and that it then got its turn.
     assert.deepEqual(
       kinds(evB, 'queued').map((event) => [event.ahead, event.blockedBy]),

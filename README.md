@@ -124,6 +124,7 @@ npx ci-local --list           # the steps, without running them
 npx ci-local --keep           # leave everything up to look at it
 npx ci-local --down           # remove what --keep left
 npx ci-local --quiet          # step output to log files, milestones only
+npx ci-local --live           # step output live, even without a terminal
 npx ci-local --events run.ndjson  # one JSON line per milestone, to follow
 npx ci-local --status         # the last run: queued, running, passed, failed or stopped
 ```
@@ -133,8 +134,8 @@ npx ci-local --status         # the last run: queued, running, passed, failed or
 
 ## Following a run
 
-By default every step's output goes to the terminal **live**, line by line, as
-the command writes it: a test reporter's progress shows as it happens. Each
+In a terminal, every step's output goes to the screen **live**, line by line,
+as the command writes it: a test reporter's progress shows as it happens. Each
 step is framed by a milestone when it starts and when it ends:
 
 ```text
@@ -143,14 +144,11 @@ step is framed by a milestone when it starts and when it ends:
 <== pnpm run test:integration: ok (7m14s)
 ```
 
-Two options change what goes where. Both combine with `--only`, `--skip` and
-`--keep`, and neither changes the summary or the lines after it.
-
-**`--quiet`** (or `CI_LOCAL_QUIET=1`), for a run nobody watches (an agent, a
-background job): each step's output goes to its own log file, and the
-terminal gets only the milestones, the summary and, when a step fails, the
-last 40 lines of its log. The log directory is printed at the start and left
-in place after the run:
+Without a terminal (stdout is not one: an agent, a background job, a pipe),
+nobody watches, so a run is **quiet** by default: each step's output goes to
+its own log file, and stdout gets only the milestones, the summary and, when
+a step fails, the last 40 lines of its log. The log directory is printed at
+the start and left in place after the run:
 
 ```text
 ci-local 0.4.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
@@ -161,6 +159,11 @@ Events: /home/me/.cache/ci-local/myapp-ci.ndjson (ci-local --status)
 <== Build the runner image: ok (0s)
 ...
 ```
+
+**`--quiet`** (or `CI_LOCAL_QUIET=1`) makes a run quiet in a terminal too;
+**`--live`** (or `CI_LOCAL_QUIET=0`) shows the output live without one, as
+`ci-local --live | tee run.log`. On the command line, the last of the two
+wins over the environment. Neither changes the summary or the lines after it.
 
 **`--events FILE`** (or `CI_LOCAL_EVENTS=FILE`): one JSON object per line for
 every milestone, for another terminal or a status display. The file is emptied
@@ -189,17 +192,18 @@ Put the file outside the checkout (inside, it is an uncommitted change in the
 summary) and in a directory only you can write: emptying a fixed name in a
 shared `/tmp` follows whatever another user left there under that name.
 
-With `--list`, `--print-plan` or `--down`, which run no step, `--quiet` and
-`--events` given on the command line are ignored, with a warning on stderr.
+With `--list`, `--print-plan` or `--down`, which run no step, `--quiet`,
+`--live` and `--events` given on the command line are ignored, with a warning
+on stderr.
 Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
 | `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `commit`, `args`, `logDir`, `session` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
-| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (`--quiet`; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`) |
-| `start` | a step starts | `step`, `index` (from 1), `total`; `log` with `--quiet` |
-| `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` with `--quiet` |
-| `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` with `--quiet` |
+| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`) |
+| `start` | a step starts | `step`, `index` (from 1), `total`; `log` when quiet |
+| `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` when quiet |
+| `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` when quiet |
 | `end` | after the cleanup | `result` (`passed`, `failed`, `interrupted`), `devStack` (`untouched`, `changed`, `none`), `durationMs` |
 
 ```sh
@@ -388,7 +392,8 @@ runs ci-local or Docker itself:
 - **Tool `ci_local_status`**: the same three lines for the agent, without a
   shell.
 - **Skill `ci-local`**: how an agent runs and waits for ci-local (in the
-  background, `--quiet`, never two runs, read only the failing step's log).
+  background (quiet without a terminal), never two runs, read only the failing
+  step's log).
   Branch and merge policy stay the project's.
 
 The extension follows the file ci-local would write: `CI_LOCAL_EVENTS` from
@@ -490,7 +495,7 @@ on your machine, with `set -e` in force. Options:
 | --- | --- |
 | `CI_LOCAL_CONFIG` | The config file name, instead of `ci-local.config.sh`. |
 | `CI_LOCAL_DOCKER_SOCK` | The Docker socket. Default: `/var/run/docker.sock`. |
-| `CI_LOCAL_QUIET` | `1` (anything but empty, `0` or `false`): as `--quiet`. |
+| `CI_LOCAL_QUIET` | `0` or `false`: as `--live`; anything else not empty: as `--quiet`. Unset: quiet when stdout is not a terminal. |
 | `CI_LOCAL_EVENTS` | A file: as `--events FILE`. `off`, `0`, `false` or `no`: no events file at all. |
 | `CI_LOCAL_QUEUE` | `off`, `0`, `false` or `no`: no queue; runs may overlap. |
 | `CI_LOCAL_QUEUE_DIR` | The queue directory (absolute). Default: `<cache>/ci-local/queue`. |
@@ -523,7 +528,7 @@ everything labelled with `CI_LABEL` are removed, unless you passed `--keep`.
 In your cache (`~/.cache/ci-local/`, see [Environment variables](#environment-variables)),
 readable by you alone: one events file per project, `<project>.ndjson`,
 replaced by the next run of the project, and the `queue` directory, empty
-between runs. With `--quiet`, each run's step logs stay in
+between runs. When quiet, each run's step logs stay in
 `$TMPDIR/<project>-logs.XXXXXX` for you to read, until you or the system
 clean `TMPDIR`.
 

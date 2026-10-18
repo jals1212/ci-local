@@ -326,6 +326,14 @@ test('--status refuses --no-wait, which starts a run', () => {
   assert.match(err, /ci-local: --status takes only --events/)
 })
 
+test('--status refuses --quiet and --live, which only shape a run', () => {
+  for (const option of ['--quiet', '--live']) {
+    const { status: code, err } = status([option], { cwd: project(["ci_step box One 'true'"]) })
+    assert.equal(code, 2, option)
+    assert.match(err, /ci-local: --status takes only --events/, option)
+  }
+})
+
 test('status.js can be imported from a process whose argv[1] is no file (it is then not the script)', () => {
   const STATUS_JS = fileURLToPath(new URL('../status.js', import.meta.url))
   const code = `import(${JSON.stringify(pathToFileURL(STATUS_JS).href)}).then((m) => console.log(typeof m.render))`

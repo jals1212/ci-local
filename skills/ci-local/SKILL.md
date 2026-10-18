@@ -4,7 +4,7 @@ description: "Trigger: ci-local, run CI locally, ci-local.config.sh, CI_PROJECT,
 license: MIT
 metadata:
   author: jals1212
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 ## Activation Contract
@@ -15,7 +15,7 @@ Use when running, waiting on, reading, or configuring `ci-local` (`npx ci-local`
 
 - Run the repository's own ci-local (`npx ci-local`, `pnpm exec ci-local`), never a global install: the version is the repository's.
 - Launch a run in the background (`bash_background` or equivalent) and wait for its exit notice; never poll, never `sleep`.
-- Add `--quiet` to unwatched runs: milestones and the summary on stdout, each step's output in its own log.
+- Unwatched runs are quiet: milestones and the summary on stdout, each step's output in its own log. From 0.5.0 that is the default without a terminal; before 0.5.0, add `--quiet`. Never add `--live` to a background run.
 - Do not touch the checkout while a run is in flight (no edits, no branch switch): the steps read it.
 - Never start a second run to "check" the first. Runs queue machine-wide by themselves (one Docker user at a time); a waiting run is normal, not a hang.
 - Read the result from the run itself: `PASSED:` / `FAILED at step:` and `Development stack untouched`. A changed development stack is a failure.
@@ -37,7 +37,7 @@ Use when running, waiting on, reading, or configuring `ci-local` (`npx ci-local`
 ## Execution Steps
 
 1. Check the plan: `ci-local --list`.
-2. Start: `ci-local --quiet` in the background.
+2. Start: `ci-local` in the background (`ci-local --quiet` before 0.5.0).
 3. While waiting, keep working on something that does not touch the checkout, or report the `--status` block.
 4. On exit: status 0 passed, 1 failed, 2 usage/config error, 3 busy with `--no-wait`.
 5. Failed: open the failing step's log, fix, and run again; partial `--only` runs are fine while fixing, the final check is a full run.
