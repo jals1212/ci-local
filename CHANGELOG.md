@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.7.0
+
 ### Added
 
 - Events: the `queued` and `run` events carry `schema` (`1`), the version of

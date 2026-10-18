@@ -6,6 +6,8 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.1.0
+
 ### Added
 
 - First release as its own package; until now it shipped inside
