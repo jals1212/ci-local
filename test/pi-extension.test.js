@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -16,6 +16,7 @@ import {
   WAKE_GRACE_MS,
   cardContent,
   createDelivery,
+  createStatusLine,
   createTracker,
   deliveryOptions,
   eventsFileFor,
@@ -397,25 +398,89 @@ test('runState carries the session a run names, or null', () => {
   assert.equal(readRun(eventsFile([run()])).state.session, null)
 })
 
-test('staleAtStart: a run already over when a session starts is hidden once its result was delivered, unless the extension reloads', () => {
+test('staleAtStart: a run already over when a session starts is hidden once its result was delivered; a reload shows it only if this session showed it', () => {
   const over = readRun(eventsFile([run(), { ts: ago(1000), event: 'end', result: 'passed', durationMs: 1000 }]))
   const live = readRun(eventsFile([run()]))
-  assert.equal(staleAtStart(null, { reason: 'startup', delivered: null }), null, 'no run: nothing to hide')
-  assert.equal(staleAtStart(live, { reason: 'startup', delivered: live.key }), null, 'in flight: shown')
-  assert.equal(staleAtStart(over, { reason: 'startup', delivered: null }), null, 'never delivered (ended with no session open): shown')
-  assert.equal(staleAtStart(over, { reason: 'new', delivered: 'an|older' }), null, 'an older run was delivered, not this one: shown')
-  assert.equal(staleAtStart(over, { reason: 'startup', delivered: over.key }), over.key, 'already delivered: hidden')
-  assert.equal(staleAtStart(over, { reason: 'resume', delivered: over.key }), over.key, 'resumed, already delivered: hidden')
-  assert.equal(staleAtStart(over, { reason: 'reload', delivered: over.key }), null, 'a reload keeps what the session showed')
+  const by = (session, key = over.key) => ({ key, sessions: session ? [session] : [] })
+  const at = (reason, delivered) => ({ reason, sessionId: 'me', delivered })
+  assert.equal(staleAtStart(null, at('startup', null)), null, 'no run: nothing to hide')
+  assert.equal(staleAtStart(live, at('startup', by('other', live.key))), null, 'in flight: shown')
+  assert.equal(staleAtStart(over, at('startup', null)), null, 'never delivered (ended with no session open): shown')
+  assert.equal(staleAtStart(over, at('new', by('other', 'an|older'))), null, 'an older run was delivered, not this one: shown')
+  assert.equal(staleAtStart(over, at('startup', by('other'))), over.key, 'already delivered: hidden')
+  assert.equal(staleAtStart(over, at('resume', by('me'))), over.key, 'resumed, delivered before it closed: hidden')
+  assert.equal(staleAtStart(over, at('reload', by('me'))), null, 'a reload keeps it when this session showed it')
+  assert.equal(staleAtStart(over, at('reload', by('other'))), over.key, 'a reload keeps it hidden when this session hid it')
+  assert.equal(staleAtStart(over, at('reload', by(null))), null, 'a marker that names no session: a reload shows it')
+  assert.equal(staleAtStart(over, at('reload', { key: over.key, sessions: ['other', 'me'] })), null, 'two sessions showed it: a reload of either shows it')
 })
 
-test('delivered marker: none at first, then the key of the last run whose result was shown, per events file', () => {
+test('delivered marker: each session records its own; a run is delivered when any session showed it', () => {
   const file = join(mkdtempSync(join(tmpdir(), 'dv-')), 'myapp-ci.ndjson')
-  assert.equal(readDelivered(file), null)
-  markDelivered(file, '2025-01-01T00:00:00Z|42')
-  assert.equal(readDelivered(file), '2025-01-01T00:00:00Z|42')
-  markDelivered(file, '2025-01-02T00:00:00Z|43')
-  assert.equal(readDelivered(file), '2025-01-02T00:00:00Z|43')
-  assert.equal(readDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson')), null)
-  markDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson'), 'k') // no directory: ignored, never thrown
+  const first = '2025-01-01T00:00:00Z|42'
+  assert.equal(readDelivered(file, first), null)
+  markDelivered(file, first, 'me')
+  assert.deepEqual(readDelivered(file, first), { key: first, sessions: ['me'] })
+  markDelivered(file, first, 'other')
+  markDelivered(file, first, 'me')
+  assert.deepEqual(readDelivered(file, first).sessions.sort(), ['me', 'other'], 'sessions add up, once each')
+  markDelivered(file, '2025-01-02T00:00:00Z|43', 'other')
+  assert.deepEqual(readDelivered(file, '2025-01-02T00:00:00Z|43'), { key: '2025-01-02T00:00:00Z|43', sessions: ['other'] })
+  assert.deepEqual(readDelivered(file, first), { key: first, sessions: ['me'] }, 'a session’s own file holds its last run')
+  assert.equal(readdirSync(`${file}.delivered.d`).length, 2, 'one file per session')
+  assert.equal(readDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson'), first), null)
+  markDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson'), 'k', 'me') // no directory: ignored, never thrown
+})
+
+test('delivered marker: a 0.5.1 marker (the key alone) still reads, naming no session', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'dv-')), 'myapp-ci.ndjson')
+  writeFileSync(`${file}.delivered`, '2025-01-03T00:00:00Z|44\n')
+  assert.deepEqual(readDelivered(file, '2025-01-03T00:00:00Z|44'), { key: '2025-01-03T00:00:00Z|44', sessions: [] })
+  assert.equal(readDelivered(file, 'another|1'), null)
+  markDelivered(file, '2025-01-03T00:00:00Z|44', 'me')
+  assert.deepEqual(readDelivered(file, '2025-01-03T00:00:00Z|44'), { key: '2025-01-03T00:00:00Z|44', sessions: ['me'] })
+})
+
+test('delivered marker: a session’s file unused for 30 days is removed when a session records', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'dv-')), 'myapp-ci.ndjson')
+  markDelivered(file, 'old|1', 'gone')
+  const old = new Date(Date.now() - 31 * 24 * 3600 * 1000)
+  for (const name of readdirSync(`${file}.delivered.d`)) utimesSync(join(`${file}.delivered.d`, name), old, old)
+  markDelivered(file, 'new|2', 'me')
+  assert.equal(readDelivered(file, 'old|1'), null)
+  assert.deepEqual(readDelivered(file, 'new|2'), { key: 'new|2', sessions: ['me'] })
+})
+
+test('status line: what each session shows, across sessions of one repository, with reloads', () => {
+  const file = eventsFile([run({ pid: deadPid() }), { ts: ago(1000), event: 'end', result: 'passed', durationMs: 1000 }])
+  const read = () => readRun(file)
+  const open = (sessionId, reason = 'startup') => createStatusLine({ file, sessionId, reason })
+
+  const a = open('a')
+  assert.match(a.update(read()).footer, /passed/, 'ended with no session open: undelivered, shown')
+  const b = open('b', 'new')
+  assert.equal(b.update(read()).footer, undefined, 'delivered by a: a new session leaves it out')
+  assert.equal(open('b', 'reload').update(read()).footer, undefined, 'b had it out: a reload keeps it out')
+  assert.match(open('a', 'reload').update(read()).footer, /passed/, 'a showed it: a reload keeps it')
+  assert.equal(open('a', 'resume').update(read()).footer, undefined, 'resumed later: already read')
+
+  // A new run, seen by both open sessions: each shows it and records it.
+  writeFileSync(file, JSON.stringify(run({ ts: ago(5000) })) + '\n')
+  assert.match(a.update(read()).footer, /running/)
+  assert.match(b.update(read()).footer, /running/, 'a run in flight shows everywhere')
+  writeFileSync(file, [run({ ts: ago(5000), pid: deadPid() }), { ts: ago(1), event: 'end', result: 'failed', durationMs: 4000 }].map((e) => JSON.stringify(e)).join('\n') + '\n')
+  assert.match(a.update(read()).footer, /failed/)
+  assert.match(b.update(read()).footer, /failed/)
+  assert.deepEqual(readDelivered(file, read().key).sessions.sort(), ['a', 'b'], 'both recorded, neither lost')
+  assert.match(open('a', 'reload').update(read()).footer, /failed/)
+  assert.match(open('b', 'reload').update(read()).footer, /failed/)
+  assert.equal(open('c').update(read()).footer, undefined)
+})
+
+test('status line: update says when the footer changed, and records a finished run once', () => {
+  const file = eventsFile([run({ pid: deadPid() }), { ts: ago(1000), event: 'end', result: 'passed', durationMs: 1000 }])
+  const line = createStatusLine({ file, sessionId: 'a', reason: 'startup' })
+  assert.equal(line.update(readRun(file)).changed, true)
+  assert.equal(line.update(readRun(file)).changed, false)
+  assert.equal(line.update(null).changed, true, 'no run any more: the footer is cleared')
 })

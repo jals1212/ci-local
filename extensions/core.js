@@ -3,7 +3,7 @@
 // rendering and the states are those of `ci-local --status` (status.js).
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
 import { BRAND, GLYPHS, alive, duration, lastRun, render, runState } from '../status.js'
@@ -144,41 +144,117 @@ export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = aliv
  * started, or null. A run already over then is shown only while its result
  * is still undelivered: no session showed it finished (it ended with every
  * session of the repository closed). Once delivered it is old news, in a new
- * session or a resumed one, except on a reload (the session already showed
- * it). A run in flight is shown, and so is every run after it.
+ * session or a resumed one. A reload keeps what the session had: the run
+ * shows again only if this session is the one that showed it. A run in
+ * flight is shown, and so is every run after it.
  */
-export function staleAtStart(run, { reason, delivered } = {}) {
-  if (!run || !FINISHED.has(run.state.state) || reason === 'reload') return null
-  return run.key === delivered ? run.key : null
+export function staleAtStart(run, { reason, sessionId, delivered } = {}) {
+  if (!run || !FINISHED.has(run.state.state) || delivered?.key !== run.key) return null
+  if (reason === 'reload' && (!delivered.sessions.length || delivered.sessions.includes(sessionId))) return null
+  return run.key
 }
 
-/** The marker of the last run whose result a session showed: next to its events file. */
-const deliveredFile = (file) => `${file}.delivered`
+/**
+ * Where sessions record the runs whose result they showed: one file per
+ * session, `<events file>.delivered.d/<session>`, holding its last run and
+ * its session. A session writes only its own file, so two sessions that see a
+ * run end at once never overwrite each other. `<events file>.delivered` is
+ * the 0.5.1 marker (the key alone), still read.
+ */
+const deliveredDir = (file) => `${file}.delivered.d`
+const legacyDelivered = (file) => `${file}.delivered`
 
-/** The key of the last run whose result was delivered (shown finished), or null. */
-export function readDelivered(file) {
+/** A session's file goes once it has gone unused this long. */
+export const DELIVERED_TTL_MS = 30 * 24 * 3600 * 1000
+
+const sessionFile = (file, session) => join(deliveredDir(file), (session || '-').replace(/[^A-Za-z0-9._-]/g, '_'))
+
+function readText(path) {
   try {
-    return readFileSync(deliveredFile(file), 'utf8').trim() || null
+    return readFileSync(path, 'utf8')
   } catch {
     return null
   }
 }
 
 /**
- * Records that the result of run `key` was delivered. Written whole (a
- * temporary file, then a rename); a failure is ignored: the result is then
+ * Whether the result of run `key` was delivered (some session showed it
+ * finished), and the sessions that showed it: { key, sessions }, or null.
+ * A 0.5.1 marker names no session.
+ */
+export function readDelivered(file, key) {
+  let found = false
+  const sessions = []
+  if (readText(legacyDelivered(file))?.trim().split('\t')[0] === key) found = true
+  let names = []
+  try {
+    names = readdirSync(deliveredDir(file))
+  } catch {}
+  for (const name of names) {
+    if (name.endsWith('.tmp')) continue
+    const [own, session] = (readText(join(deliveredDir(file), name)) ?? '').trim().split('\t')
+    if (own !== key) continue
+    found = true
+    if (session && !sessions.includes(session)) sessions.push(session)
+  }
+  return found ? { key, sessions } : null
+}
+
+/**
+ * Records that `session` showed the result of run `key`, in its own file
+ * (a temporary file, then a rename), and removes the files of sessions
+ * unused for DELIVERED_TTL_MS. A failure is ignored: the result is then
  * shown once more, never lost.
  */
-export function markDelivered(file, key) {
-  const target = deliveredFile(file)
+export function markDelivered(file, key, session) {
+  const dir = deliveredDir(file)
+  const target = sessionFile(file, session)
   const temporary = `${target}.${process.pid}.tmp`
   try {
-    writeFileSync(temporary, `${key}\n`, { mode: 0o600 })
+    mkdirSync(dir, { mode: 0o700 })
+  } catch {}
+  try {
+    writeFileSync(temporary, `${key}\t${session ?? ''}\n`, { mode: 0o600 })
     renameSync(temporary, target)
   } catch {
     try {
       rmSync(temporary, { force: true })
     } catch {}
+    return
+  }
+  try {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name)
+      if (path !== target && Date.now() - statSync(path).mtimeMs > DELIVERED_TTL_MS) rmSync(path, { force: true })
+    }
+  } catch {}
+}
+
+/**
+ * The status line of one session: the footer for each run read, leaving out
+ * the run staleAtStart names, and recording each finished run it shows as
+ * delivered. update() gives the footer (undefined: none) and whether it
+ * changed since the last call.
+ */
+export function createStatusLine({ file, sessionId, reason }) {
+  let stale = null
+  try {
+    const run = readRun(file)
+    stale = staleAtStart(run, { reason, sessionId, delivered: run ? readDelivered(file, run.key) : null })
+  } catch {
+    // a half-written file: a run in progress, shown as usual
+  }
+  let shown
+  let first = true
+  return {
+    update(run) {
+      const footer = run && run.key !== stale ? footerText(run.state) : undefined
+      const changed = first || footer !== shown
+      first = false
+      shown = footer
+      if (changed && run && footer && FINISHED.has(run.state.state)) markDelivered(file, run.key, sessionId)
+      return { footer, changed }
+    },
   }
 }
 

@@ -5,7 +5,7 @@
 //   behind erp-ci`, then `🚦 ✓ ci-local passed · 4m12s` / `🚦 ✗ ci-local failed
 //   at lint` until the next run (🚦 is ci-local's own emoji, see BRAND).
 //   A run already over when a session starts is shown only if no session
-//   showed its result yet, like a message not yet delivered (staleAtStart).
+//   showed its result yet, like a message not yet delivered (createStatusLine).
 // - Cards and the agent: only for runs this session started, as Gentle AI's job
 //   notices go only to the session that started the job: a run that names this
 //   session (PI_SESSION_ID, from its bash tool), or, naming none, one whose
@@ -34,17 +34,13 @@ import {
   WAKE_TEXT,
   cardContent,
   createDelivery,
+  createStatusLine,
   createTracker,
   deliveryOptions,
   eventsFileFor,
   findProject,
-  footerText,
-  FINISHED,
-  markDelivered,
   ownsRun,
-  readDelivered,
   readRun,
-  staleAtStart,
 } from './core.js'
 
 const KEY = 'ci-local'
@@ -143,7 +139,6 @@ export default function ciLocal(pi: ExtensionAPI) {
     }
     const ends = createDelivery()
     delivery = ends
-    let shown: string | undefined
 
     // Whether each run seen in flight is this session's own (decided once: by the
     // session the run names, else by its process tree; see ownsRun).
@@ -154,15 +149,10 @@ export default function ciLocal(pi: ExtensionAPI) {
       return owned.get(run.key)
     }
 
-    // A run already over when the session starts, whose result a session
-    // already showed, stays out of the status line (see staleAtStart); the
-    // next run shows as usual.
-    let stale: string | null = null
-    try {
-      stale = staleAtStart(readRun(file), { reason: event.reason, delivered: readDelivered(file) })
-    } catch {
-      // a half-written file: a run in progress, shown as usual
-    }
+    // The status line leaves out a run already over whose result a session
+    // already showed, and records each finished run it shows (see
+    // createStatusLine in core.js).
+    const statusLine = createStatusLine({ file, sessionId, reason: event.reason })
 
     const tick = () => {
       let run
@@ -171,14 +161,8 @@ export default function ciLocal(pi: ExtensionAPI) {
       } catch {
         return // a half-written file: the next tick reads it whole
       }
-      const footer = run && run.key !== stale ? footerText(run.state) : undefined
-      if (footer !== shown) {
-        ctx.ui.setStatus(KEY, footer)
-        shown = footer
-        // A finished run shown is a result delivered: a later session of this
-        // repository leaves it out (see staleAtStart).
-        if (run && footer && FINISHED.has(run.state.state)) markDelivered(file, run.key)
-      }
+      const { footer, changed } = statusLine.update(run)
+      if (changed) ctx.ui.setStatus(KEY, footer)
       // Only this session's own runs get cards and reach the agent, as Gentle
       // AI's job notices go only to the session that started the job. Another
       // session's run in this repository shows in the status line alone. What
