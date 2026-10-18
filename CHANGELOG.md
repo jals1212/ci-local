@@ -7,6 +7,30 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Fixed
+
+- A TMPDIR fallback cache that is not private (neither `XDG_CACHE_HOME` nor
+  `HOME` set) is now said only by a real run and by `--status`, which still
+  exits 2. `--list`, `--print-plan` and `--down` use neither events nor queue,
+  and no longer print the warning.
+- Test: the queue test `two runs: the second waits…` (flaky once in about 43
+  runs) no longer orders the two runs by the millisecond timestamps of two
+  processes. It reads B's run event, and then checks that A's end is already
+  in A's file. Its wait for a step to start is 30 seconds, not 15. Its failure
+  output is kept for the next time it fails.
+
+### Changed
+
+- Tests: the Pi extension's glue (`extensions/ci-local.ts`) is covered, with a
+  stand-in Pi and mock timers (Node 22.6 and later): one notification and one
+  end card per run seen in flight, delivery for an idle agent (stored, then one
+  hidden wake) and for an agent in a run (steered in), start cards, a run of
+  another session (status line only), the card renderers and the
+  `ci_local_status` tool.
+- `bin/ci-local`: a comment at `queue_lock` records why removing a stale lock
+  by check-then-move is safe today, and that a change letting two runs try
+  the lock at once needs a compare-and-move. No change in behavior.
+
 ## 0.5.2
 
 ### Fixed
