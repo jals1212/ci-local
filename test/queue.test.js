@@ -78,7 +78,7 @@ function start(args, { cwd, queue, env = {} }) {
 }
 
 /** Resolves when check() is true; fails after timeoutMs. */
-async function until(check, timeoutMs = 15000) {
+async function until(check, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs
   while (!check()) {
     if (Date.now() > deadline) throw new Error(`still waiting after ${timeoutMs}ms`)
@@ -154,11 +154,15 @@ test('two runs: the second waits for the first’s end, says whom it waits for, 
     assert.equal(tickets(queue).length, 2)
 
     release(dirA)
+    // Order by cause, not by clock: A writes its end before it gives the turn
+    // up, and B's run event comes after it got the turn, so when B's run is
+    // there A's end must be. (Timestamps of two processes are not a safe
+    // order: each is truncated to its own millisecond, and a clock may step.)
+    await until(() => kinds(evB, 'run').length > 0)
+    assert.equal(kinds(evA, 'end').length, 1, 'A’s end is written before B’s run begins')
     const [a, b] = await Promise.all([runA.done, runB.done])
     assert.equal(a.status, 0, a.err)
     assert.equal(b.status, 0, b.err)
-    assert.ok(at(evB, 'start') >= at(evA, 'end'), 'B’s first step starts after A’s end')
-    assert.ok(at(evB, 'run') >= at(evA, 'end'))
     assert.match(b.out, /\nQueue: your turn after \d+s\n/)
     assert.doesNotMatch(a.out, /Waiting for |Queue: your turn/)
     assert.ok(b.out.indexOf('Queue: your turn') < b.out.search(/ci-local \d+\.\d+\.\d+: 1 steps/), 'before the banner')
@@ -182,6 +186,7 @@ test('two runs: the second waits for the first’s end, says whom it waits for, 
     assert.deepEqual(readdirSync(queue), [])
   } catch (error) {
     // Seen failing once in about 40 runs and never reproduced: say everything.
+    // (See issue #7: paste this output there if it fails again.)
     const dump = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '(none)')
     error.message += `\n--- A out:\n${runA.out}\n--- A err:\n${runA.err}\n--- A events:\n${dump(evA)}`
     error.message += `\n--- B out:\n${runB?.out}\n--- B err:\n${runB?.err}\n--- B events:\n${dump(evB)}`
