@@ -29,7 +29,10 @@ function baseEnv(cache, env) {
   const base = { ...process.env }
   delete base.CI_LOCAL_QUIET
   delete base.CI_LOCAL_EVENTS
-  return { ...base, XDG_CACHE_HOME: cache, PATH: `${FAKE_DOCKER}:${process.env.PATH}`, ...env }
+  delete base.CI_LOCAL_QUEUE
+  delete base.CI_LOCAL_QUEUE_POLL
+  // The queue in a directory of its own: never the real one.
+  return { ...base, XDG_CACHE_HOME: cache, CI_LOCAL_QUEUE_DIR: mkdtempSync(join(tmpdir(), 'q-')), PATH: `${FAKE_DOCKER}:${process.env.PATH}`, ...env }
 }
 
 /** A run, to its end. */
@@ -89,7 +92,7 @@ test('a run writes its events to the cache by default, and says where', async ()
   const events = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
   assert.deepEqual(
     events.map(({ event }) => event),
-    ['run', 'start', 'ok', 'end']
+    ['queued', 'run', 'start', 'ok', 'end']
   )
 })
 
@@ -243,6 +246,81 @@ test('--status with --events needs no config, nor Docker', () => {
 
 test('--status refuses the options that run steps', () => {
   const { status: code, err } = status(['--only', 'a'], { cwd: project(["ci_step box One 'true'"]) })
+  assert.equal(code, 2)
+  assert.match(err, /ci-local: --status takes only --events/)
+})
+
+const queuedEvent = (fields = {}) => ({
+  ts: new Date(Date.now() - 65_000).toISOString(),
+  event: 'queued',
+  project: 'myapp-ci',
+  version: '0.4.0',
+  pid: process.pid,
+  commit: 'abc123def456',
+  args: ['--quiet'],
+  logDir: null,
+  ahead: 2,
+  blockedBy: { project: 'other-ci', pid: 4242 },
+  ...fields,
+})
+
+test('--status on a run waiting its turn: the queued block, status 3', () => {
+  const file = eventsFile([queuedEvent({ ahead: 1 }), queuedEvent({ ahead: 2 })])
+  const { status: code, out } = status(['--events', file])
+  assert.equal(code, 3)
+  const lines = out.split('\n')
+  assert.equal(lines.length, 4, out)
+  assert.equal(lines[0], '> ⏳ **ci-local** · queued · behind other-ci (2 ahead)')
+  assert.match(lines[1], /^> `ci-local --quiet` · project `myapp-ci` · `abc123def456` · waiting 1m0[56]s$/)
+  assert.equal(lines[2], `> Follow it: \`tail -f ${file}\``)
+  assert.equal(lines[3], '')
+})
+
+test('--status on a run that took its turn but has not started: starting, status 3', () => {
+  const file = eventsFile([queuedEvent({ ahead: 0, blockedBy: null, commit: null, args: [] })])
+  const { status: code, out } = status(['--events', file])
+  assert.equal(code, 3)
+  const lines = out.trimEnd().split('\n')
+  assert.equal(lines[0], '> 🐳 **ci-local** · starting')
+  assert.match(lines[1], /^> `ci-local` · project `myapp-ci` · not a git checkout · 1m0[56]s so far$/)
+  assert.equal(lines[2], `> Follow it: \`tail -f ${file}\``)
+})
+
+test('--status on a run that has taken its turn: running, counted from the run event', () => {
+  const file = eventsFile([
+    queuedEvent({ ts: new Date(Date.now() - 600_000).toISOString() }),
+    runEvent(),
+    { ts: new Date().toISOString(), event: 'start', step: 'pnpm test', index: 1, total: 8 },
+  ])
+  const { status: code, out } = status(['--events', file])
+  assert.equal(code, 3)
+  assert.match(out, /^> 🐳 \*\*ci-local\*\* · running · \[1\/8\] pnpm test\n> .* · 2m0[56]s so far\n/)
+})
+
+test('--status on a queued run whose process is gone: stopped before it started, status 4', () => {
+  const file = eventsFile([queuedEvent({ pid: deadPid() })])
+  const { status: code, out } = status(['--events', file])
+  assert.equal(code, 4)
+  const lines = out.trimEnd().split('\n')
+  assert.equal(lines[0], '> ⚠️ **ci-local** · stopped')
+  assert.equal(lines[1], '> `ci-local --quiet` · project `myapp-ci` · `abc123def456`')
+  assert.match(lines[2], /^> Never started: process \d+ is gone while queued \(interrupted, or the machine was busy with --no-wait\) · 1m0[56]s\.$/)
+})
+
+test('--status with only the last run’s events: an earlier run in the file is not seen', () => {
+  const file = eventsFile([
+    queuedEvent({ pid: deadPid() }),
+    runEvent({ pid: deadPid() }),
+    { ts: runEvent().ts, event: 'end', result: 'passed', durationMs: 1000 },
+    queuedEvent({ ahead: 1 }),
+  ])
+  const { status: code, out } = status(['--events', file])
+  assert.equal(code, 3)
+  assert.match(out, /^> ⏳ \*\*ci-local\*\* · queued · behind other-ci \(1 ahead\)\n/)
+})
+
+test('--status refuses --no-wait, which starts a run', () => {
+  const { status: code, err } = status(['--no-wait'], { cwd: project(["ci_step box One 'true'"]) })
   assert.equal(code, 2)
   assert.match(err, /ci-local: --status takes only --events/)
 })

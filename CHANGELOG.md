@@ -23,6 +23,30 @@ their `release x.y.z:` commit messages.
   `logDir`; `start`, `ok` and `fail` carry the step's `log` with `--quiet`;
   `end` carries `devStack` (`untouched`, `changed`, `none`). Existing fields
   are unchanged.
+- A machine-wide queue: runs of every project take their turn, first come
+  first served, so Docker has one at a time. A run that has to wait prints
+  `Waiting for <project> (pid <pid>) · <n> ahead` (again only when that
+  changes) and `Queue: your turn after <time>`. `--no-wait` exits with the new
+  status 3 (`ci-local: the machine is busy: ...`) instead of waiting;
+  `CI_LOCAL_QUEUE=off` lets runs overlap; `CI_LOCAL_QUEUE_DIR` and
+  `CI_LOCAL_QUEUE_POLL` name the directory (default
+  `~/.cache/ci-local/queue`) and the polling interval. An interrupt while
+  waiting leaves the queue and exits 130 or 143 with no cleanup; tickets and
+  locks of dead processes are ignored.
+- A `queued` event, written as soon as the run starts and again when whom it
+  waits for changes (`project`, `version`, `pid`, `commit`, `args`, `logDir`,
+  `ahead`, `blockedBy`), so `--status` never has a gap before the `run` event.
+  `--status` shows `queued` (⏳) and `starting` (🐳), both with exit status 3.
+
+### Changed
+
+- Concurrent runs now wait their turn by default (see the queue above); use
+  `CI_LOCAL_QUEUE=off` for the old behaviour.
+- The `run` event is written when the run has its turn, after the `queued`
+  event; the summary's total no longer counts the wait.
+- Without `XDG_CACHE_HOME` nor `HOME` the cache is a private directory under
+  `TMPDIR` (it used to be an error); directories ci-local creates in the
+  cache have mode 700.
 
 ## 0.3.0
 
