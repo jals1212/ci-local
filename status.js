@@ -107,6 +107,8 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
     command: ['ci-local', ...(run.args ?? []).map(quote)].join(' '),
     logDir: run.logDir ?? null,
     pid: run.pid,
+    // The Pi session that started the run (PI_SESSION_ID), or null.
+    session: run.session ?? null,
     step,
     fail,
     end: end ?? null,

@@ -3,9 +3,10 @@
 //
 // - Footer: `🐳 ci-local [3/8] lint · 2m05s`, `⏳ queued · behind erp-ci`,
 //   then `✅ passed · 4m12s` / `❌ failed at lint` until the next run.
-// - Cards and the agent: only for runs this session started (its bash tool, or
-//   a background job of it), as Gentle AI's job notices go only to the session
-//   that started the job. Another session's run in the same repository, or one
+// - Cards and the agent: only for runs this session started, as Gentle AI's job
+//   notices go only to the session that started the job: a run that names this
+//   session (PI_SESSION_ID, from its bash tool), or, naming none, one whose
+//   process descends from this session's (a background job). Another session's run in the same repository, or one
 //   started in a terminal, shows in the status line alone.
 // - When a run starts: a card in the transcript when it is starting (or
 //   waiting for its turn), another when its steps start; for you only (session
@@ -35,7 +36,7 @@ import {
   eventsFileFor,
   findProject,
   footerText,
-  launchedBy,
+  ownsRun,
   readRun,
 } from './core.js'
 
@@ -137,11 +138,12 @@ export default function ciLocal(pi: ExtensionAPI) {
     delivery = ends
     let shown: string | undefined
 
-    // Whether each run seen in flight is this session's own (decided once, while
-    // its process is alive: see launchedBy).
+    // Whether each run seen in flight is this session's own (decided once: by the
+    // session the run names, else by its process tree; see ownsRun).
+    const sessionId = ctx.sessionManager.getSessionId()
     const owned = new Map<string, boolean>()
-    const ownsRun = (run: NonNullable<ReturnType<typeof readRun>>) => {
-      if (!owned.has(run.key)) owned.set(run.key, launchedBy(run.state.pid, process.pid))
+    const isOwn = (run: NonNullable<ReturnType<typeof readRun>>) => {
+      if (!owned.has(run.key)) owned.set(run.key, ownsRun(run, { sessionId }))
       return owned.get(run.key)
     }
 
@@ -161,7 +163,7 @@ export default function ciLocal(pi: ExtensionAPI) {
       // AI's job notices go only to the session that started the job. Another
       // session's run in this repository shows in the status line alone. What
       // is owed for an earlier own run is delivered either way.
-      if (run && ownsRun(run)) {
+      if (run && isOwn(run)) {
         const phase = tracker.phase(run)
         if (phase) {
           try {

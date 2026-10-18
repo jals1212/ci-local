@@ -455,6 +455,7 @@ test('with neither HOME nor XDG_CACHE_HOME: a run and --status use a directory u
   delete base.HOME
   delete base.XDG_CACHE_HOME
   delete base.CI_LOCAL_EVENTS
+  delete base.PI_SESSION_ID
   const shown = spawnSync('bash', [BIN, '--status'], { cwd: dir, encoding: 'utf8', env: base })
   assert.equal(shown.status, 0, shown.stderr)
   assert.match(shown.stdout, /^> ✅ \*\*ci-local\*\* · passed\n/)

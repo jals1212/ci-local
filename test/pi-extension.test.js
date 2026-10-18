@@ -22,6 +22,7 @@ import {
   findProject,
   footerText,
   launchedBy,
+  ownsRun,
   parentPid,
   readRun,
   routeFor,
@@ -374,4 +375,21 @@ test('launchedBy: when the run’s parents cannot be read while it lives, the ru
 
 test('parentPid is undefined, not null, when ps cannot run', () => {
   assert.equal(parentPid(process.pid, { ps: '/no/such/ps' }), undefined)
+})
+
+test('ownsRun: a run that names its Pi session belongs to that session alone; one that names none falls back to its process tree', () => {
+  const own = { state: { session: 'me', pid: 1 } }
+  const other = { state: { session: 'someone-else', pid: 1 } }
+  const unnamed = { state: { session: null, pid: 1 } }
+  const tree = (answer) => () => answer
+  assert.equal(ownsRun(own, { sessionId: 'me', launched: tree(false) }), true, 'its session, even orphaned')
+  assert.equal(ownsRun(other, { sessionId: 'me', launched: tree(true) }), false, 'another session’s, whatever the tree says')
+  assert.equal(ownsRun(unnamed, { sessionId: 'me', launched: tree(true) }), true, 'a background job: the tree decides')
+  assert.equal(ownsRun(unnamed, { sessionId: 'me', launched: tree(false) }), false, 'a terminal’s')
+})
+
+test('runState carries the session a run names, or null', () => {
+  const named = readRun(eventsFile([run({ session: 'me' })]))
+  assert.equal(named.state.session, 'me')
+  assert.equal(readRun(eventsFile([run()])).state.session, null)
 })

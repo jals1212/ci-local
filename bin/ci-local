@@ -1011,7 +1011,7 @@ emit_queued() {
   local by=null
   [[ -z "$BLOCK_PROJECT" ]] ||
     by="{\"project\":$(json_string "$BLOCK_PROJECT"),\"pid\":${BLOCK_PID:-null}}"
-  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"ahead\":$AHEAD,\"blockedBy\":$by"
+  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ahead\":$AHEAD,\"blockedBy\":$by"
 }
 
 # Waits for the turn, and takes the lock. Prints what it waits for when that
@@ -1161,6 +1161,10 @@ RUN_COMMIT=null
 if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   RUN_COMMIT="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null)" && RUN_COMMIT="$(json_string "$RUN_COMMIT")" || RUN_COMMIT=null
 fi
+# The Pi session that started this run, if any (Pi gives the processes of its
+# bash tool PI_SESSION_ID): the Pi extension shows a run to that session alone.
+RUN_SESSION=null
+[[ -z "${PI_SESSION_ID:-}" ]] || RUN_SESSION="$(json_string "$PI_SESSION_ID")"
 RUN_LOG_DIR=null
 [[ -z "$LOG_DIR" ]] || RUN_LOG_DIR="$(json_string "$LOG_DIR")"
 
@@ -1265,7 +1269,7 @@ teardown
 PLAN_STARTED=1
 # RUN_MS: the run event's time, from which the end event's durationMs counts.
 # pid: --status tells a run still going from one killed before its end event.
-emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR"
+emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION"
 RUN_MS=${EV_MS:-}
 # Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
 # subshells included, and host steps rely on it.

@@ -107,6 +107,18 @@ export function parentPid(pid, { ps = 'ps' } = {}) {
 }
 
 /**
+ * Whether a run is this session's own. A run that names the Pi session that
+ * started it (ci-local records PI_SESSION_ID, which Pi gives its bash tool)
+ * belongs to that session alone, wherever its process went. One that names
+ * none (a Gentle AI background job, a terminal) is decided by its process
+ * tree (launchedBy).
+ */
+export function ownsRun(run, { sessionId, launched = (pid) => launchedBy(pid, process.pid) }) {
+  const named = run.state.session
+  return named ? named === sessionId : launched(run.state.pid)
+}
+
+/**
  * True when the process `pid` descends from `ancestor`: a run this session
  * started (its bash tool, or a background job of it) and so one it owns, as
  * Gentle AI's background jobs belong to the session that started them. A run
