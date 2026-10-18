@@ -5,7 +5,7 @@
 // file, and that the summary is the same in every mode.
 
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -166,7 +166,9 @@ test('without a terminal (an agent, a background job), a run is quiet by default
   assert.equal(readFileSync(join(logs, '01-say-hello.log'), 'utf8'), 'hello-from-step\n')
 })
 
-test('in a terminal, a run is live by default; --quiet still sends the output to logs', async () => {
+const hasPython = spawnSync('python3', ['-c', 'import pty'], { stdio: 'ignore' }).status === 0
+
+test('in a terminal, a run is live by default; --quiet still sends the output to logs', { skip: !hasPython && 'no python3 for a pty' }, async () => {
   const dir = project(["ci_step box 'Say hello' 'echo hello-from-step'"])
   const live = await inTerminal([], { cwd: dir })
   assert.equal(live.status, 0, live.out)

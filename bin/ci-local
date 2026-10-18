@@ -505,8 +505,9 @@ PRINT_PLAN=0
 HELP=0
 STATUS=0
 NO_WAIT=0
-# Quiet when nobody watches: stdout is not a terminal (an agent, a background
-# job, a pipe). CI_LOCAL_QUIET, then --quiet or --live (the last one wins), decide otherwise.
+# Quiet by default when nobody watches: stdout is not a terminal (an agent, a
+# background job, a pipe). CI_LOCAL_QUIET overrides that default; --quiet and
+# --live, parsed below, override both (the last one given wins).
 if [[ -t 1 ]]; then QUIET=0; else QUIET=1; fi
 case "${CI_LOCAL_QUIET:-}" in '') ;; 0 | false) QUIET=0 ;; *) QUIET=1 ;; esac
 # The queue every real run takes its turn in; CI_LOCAL_QUEUE=off lets runs overlap.
