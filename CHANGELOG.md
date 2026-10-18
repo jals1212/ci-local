@@ -17,6 +17,15 @@ their `release x.y.z:` commit messages.
   (`status.d.ts`): `lastRun`, `runState`, `render` and the helpers behind
   them, for readers of the events file such as the Pi extension. (#35)
 
+### Changed
+
+- The Pi extension and the `ci-local` skill move to their own package,
+  `@jals1212/ci-local-pi` (`pi install npm:@jals1212/ci-local-pi`, then
+  `pi remove npm:@jals1212/ci-local`). This package keeps a bridge until
+  0.8.0: its `pi` entry loads the same extension, says once per session that
+  it moved, and steps aside when `@jals1212/ci-local-pi` is loaded too. The
+  optional Pi peer dependencies move with it. (#35)
+
 ## 0.6.0
 
 ### Added
