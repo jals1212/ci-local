@@ -348,6 +348,10 @@ repository:
 pi install npm:@jals1212/ci-local
 ```
 
+It needs Pi 0.84.3 or later (the `agent_settled` and
+`session_compact_failed` events, entry renderers, and `PI_SESSION_ID` in the
+bash tool).
+
 In a session opened inside a repository with `ci-local.config.sh` (with a
 literal `CI_PROJECT=`), it follows the events file of that project; it never
 runs ci-local or Docker itself:
