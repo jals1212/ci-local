@@ -233,27 +233,27 @@ Markdown, ready to paste in a chat or a pull request, while the run goes on
 and after it ends. It needs no Docker and changes nothing.
 
 ```text
-> 🐳 **ci-local** · running · [9/12] pnpm run test:integration
+> ⧗ **ci-local** · running · [9/12] pnpm run test:integration
 > `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de` · 6m41s so far
 > Follow it: `tail -f /home/me/.cache/ci-local/myapp-ci.ndjson` · step output: `/tmp/myapp-ci-logs.Xa81Qe`
 
-> ⏳ **ci-local** · queued · behind other-ci (1 ahead)
+> ◌ **ci-local** · queued · behind other-ci (1 ahead)
 > `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de` · waiting 4m12s
 > Follow it: `tail -f /home/me/.cache/ci-local/myapp-ci.ndjson`
 
-> 🐳 **ci-local** · starting
+> ⧗ **ci-local** · starting
 > `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de` · 2s so far
 > Follow it: `tail -f /home/me/.cache/ci-local/myapp-ci.ndjson`
 
-> ✅ **ci-local** · passed
+> ✓ **ci-local** · passed
 > `ci-local` · project `myapp-ci` · `3f2a91c0b7de`
 > 12 steps · 9m03s · every step passed · Development stack untouched.
 
-> ❌ **ci-local** · failed
+> ✗ **ci-local** · failed
 > `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de`
 > Failed at: pnpm run lint (step 5/12, exit 1) · 2m10s · log: `/tmp/myapp-ci-logs.Xa81Qe/05-pnpm-run-lint.log`.
 
-> ⚠️ **ci-local** · stopped
+> ⊘ **ci-local** · stopped
 > `ci-local` · project `myapp-ci` · `3f2a91c0b7de`
 > No end: process 48213 is gone (killed, or Docker froze) · during: pnpm test (step 8/12).
 ```
@@ -294,7 +294,7 @@ ci-local 0.4.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 
 The line is printed again only when whom the run waits for, or how many are
 ahead, changes. The run records the same in a `queued` event, so `--status`
-shows it (`⏳ queued · behind other-ci`) from the first moment, and nothing
+shows it (`◌ queued · behind other-ci`) from the first moment, and nothing
 touches Docker, the runner or the development stack until the turn comes.
 The `total` of the summary counts from the turn, not from the wait.
 
@@ -343,8 +343,8 @@ In a session opened inside a repository with `ci-local.config.sh` (with a
 literal `CI_PROJECT=`), it follows the events file of that project; it never
 runs ci-local or Docker itself:
 
-- **Status line**: `⏳ ci-local queued · behind erp-ci`, `🐳 ci-local [3/8] lint · 2m05s`,
-  then `✅ ci-local passed · 4m12s` or `❌ ci-local failed at lint · 2m10s` until
+- **Status line**: `◌ ci-local queued · behind erp-ci`, `⧗ ci-local [3/8] lint · 2m05s`,
+  then `✓ ci-local passed · 4m12s` or `✗ ci-local failed at lint · 2m10s` until
   the next run. Pi shows it in the footer. A shell that draws its own chrome
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
@@ -358,8 +358,8 @@ runs ci-local or Docker itself:
   or in a terminal, shows in the status line alone, as Gentle AI's
   background-job notices go only to the session that started the job.
 - **When a run starts**: a card in the transcript when it is starting, or
-  waiting for its turn (`⏳ ci-local · queued · behind erp-ci`), and another
-  when its steps start (`🐳 ci-local · running · [1/14] …`). They are for you
+  waiting for its turn (`◌ ci-local · queued · behind erp-ci`), and another
+  when its steps start (`⧗ ci-local · running · [1/14] …`). They are for you
   only: session entries, never in the model's context, and not shown again
   after a reload.
 - **When a run the session saw in flight ends**: a notification at once, and

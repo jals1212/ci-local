@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
-import { alive, duration, lastRun, render, runState } from '../status.js'
+import { GLYPHS, alive, duration, lastRun, render, runState } from '../status.js'
 
 const PROJECT_LINE = /^\s*CI_PROJECT=(?:"([a-z0-9][a-z0-9_-]*)"|'([a-z0-9][a-z0-9_-]*)'|([a-z0-9][a-z0-9_-]*))\s*(?:#.*)?$/
 
@@ -145,20 +145,20 @@ export function footerText(state) {
   switch (state.state) {
     case 'running':
       return state.step
-        ? `🐳 ci-local [${state.step.index}/${state.step.total}] ${state.step.step} · ${time}`
-        : `🐳 ci-local running · ${time}`
+        ? `${GLYPHS.running} ci-local [${state.step.index}/${state.step.total}] ${state.step.step} · ${time}`
+        : `${GLYPHS.running} ci-local running · ${time}`
     case 'starting':
-      return `🐳 ci-local starting · ${time}`
+      return `${GLYPHS.starting} ci-local starting · ${time}`
     case 'queued': {
       const behind = state.blockedBy?.project
-      return behind ? `⏳ ci-local queued · behind ${behind}` : '⏳ ci-local queued'
+      return behind ? `${GLYPHS.queued} ci-local queued · behind ${behind}` : `${GLYPHS.queued} ci-local queued`
     }
     case 'passed':
-      return `✅ ci-local passed · ${time}`
+      return `${GLYPHS.passed} ci-local passed · ${time}`
     case 'failed':
-      return state.fail ? `❌ ci-local failed at ${state.fail.step} · ${time}` : `❌ ci-local failed · ${time}`
+      return state.fail ? `${GLYPHS.failed} ci-local failed at ${state.fail.step} · ${time}` : `${GLYPHS.failed} ci-local failed · ${time}`
     default:
-      return '⚠️ ci-local stopped'
+      return `${GLYPHS.stopped} ci-local stopped`
   }
 }
 

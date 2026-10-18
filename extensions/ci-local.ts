@@ -1,8 +1,8 @@
 // Pi extension for @jals1212/ci-local: the state of this repository's
 // ci-local run in Pi's own UI, so neither the agent nor you write it by hand.
 //
-// - Footer: `🐳 ci-local [3/8] lint · 2m05s`, `⏳ queued · behind erp-ci`,
-//   then `✅ passed · 4m12s` / `❌ failed at lint` until the next run.
+// - Status line: `⧗ ci-local [3/8] lint · 2m05s`, `◌ queued · behind erp-ci`,
+//   then `✓ passed · 4m12s` / `✗ failed at lint` until the next run.
 // - Cards and the agent: only for runs this session started, as Gentle AI's job
 //   notices go only to the session that started the job: a run that names this
 //   session (PI_SESSION_ID, from its bash tool), or, naming none, one whose
