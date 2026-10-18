@@ -151,7 +151,7 @@ a step fails, the last 40 lines of its log. The log directory is printed at
 the start and left in place after the run:
 
 ```text
-ci-local 0.5.1: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+ci-local 0.5.2: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 Step output: /tmp/myapp-ci-logs.Xa81Qe
 Events: /home/me/.cache/ci-local/myapp-ci.ndjson (ci-local --status)
 
@@ -298,7 +298,7 @@ that finds the machine busy waits:
 Waiting for other-ci (pid 48213) · 1 ahead
 ...
 Queue: your turn after 4m12s
-ci-local 0.5.1: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+ci-local 0.5.2: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 ```
 
 The line is printed again only when whom the run waits for, or how many are
@@ -362,8 +362,9 @@ runs ci-local or Docker itself:
   result is undelivered, like an unread message: it ended with no session of
   the repository open. Once a session has shown it finished, a later session
   (new or resumed) leaves it out, and a reload keeps it out unless that
-  session is the one that showed it; the marker, `<events file>.delivered`,
-  holds the run and the sessions that showed it. A run in flight, and every later one, shows. Pi shows it in the footer. A shell that draws its own chrome
+  session is the one that showed it. Each session records the last run it
+  showed in its own file, under `<events file>.delivered.d/` (a file unused
+  for 30 days is removed). A run in flight, and every later one, shows. Pi shows it in the footer. A shell that draws its own chrome
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).
