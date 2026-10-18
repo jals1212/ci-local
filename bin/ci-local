@@ -926,6 +926,8 @@ queue_lock() {
       return 0
     fi
     BLOCK_PROJECT="$(cat "$lock/project" 2>/dev/null || true)"
+    # Released between the mkdir and this read: free again, try again.
+    [[ -n "$BLOCK_PROJECT" || -d "$lock" ]] || continue
     [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
     holder=""
     [[ ! -f "$lock/pid" ]] || read -r holder <"$lock/pid" 2>/dev/null || true
@@ -950,24 +952,30 @@ queue_lock() {
 # BLOCK_PROJECT and BLOCK_PID say what we wait for: the first live ticket
 # before ours, else the holder of the lock.
 queue_poll() {
-  local name
-  BLOCK_PROJECT=""
-  BLOCK_PID=""
-  # Our ticket gone (removed by mistake, or never made): made again, looked for again.
-  if ! queue_scan; then
-    write_ticket
-    queue_scan || true
-  fi
-  if [[ $AHEAD -gt 0 ]]; then
-    name=${FIRST_TICKET##*/}
-    BLOCK_PID=$((10#${name##*-}))
-    BLOCK_PROJECT="$(ticket_value "$FIRST_TICKET" project)"
-    [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
-    return 1
-  fi
-  queue_lock || return 1
-  BLOCK_PROJECT=""
-  BLOCK_PID=""
+  local name tries
+  for tries in 1 2 3; do
+    BLOCK_PROJECT=""
+    BLOCK_PID=""
+    # Our ticket gone (removed by mistake, or never made): made again, looked for again.
+    if ! queue_scan; then
+      write_ticket
+      queue_scan || true
+    fi
+    if [[ $AHEAD -gt 0 ]]; then
+      name=${FIRST_TICKET##*/}
+      BLOCK_PID=$((10#${name##*-}))
+      BLOCK_PROJECT="$(ticket_value "$FIRST_TICKET" project)"
+      # That run ended between the scan and this read: look again rather than
+      # report an unknown project (or a change that is none).
+      [[ -n "$BLOCK_PROJECT" || -e "$FIRST_TICKET" || $tries -eq 3 ]] || continue
+      [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
+      return 1
+    fi
+    queue_lock || return 1
+    BLOCK_PROJECT=""
+    BLOCK_PID=""
+    return 0
+  done
 }
 
 # The lock (when ours: lock/pid is this process) and the ticket, given back.
