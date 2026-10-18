@@ -7,6 +7,15 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Fixed
+
+- Pi status line: a session that starts no longer shows a run whose result
+  a session already showed (`🚦 ✓ ci-local passed · 12m14s` from an earlier
+  session). A run that ended with no session of the repository open is still
+  shown, once, like an unread message; a marker next to the events file
+  (`<events file>.delivered`) records the last run delivered. A run in flight,
+  a run that ends later, and a reload show as before.
+
 ### Changed
 
 - README: the Pi package needs Pi 0.84.3 or later.

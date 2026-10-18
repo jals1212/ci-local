@@ -4,6 +4,8 @@
 // - Status line: `🚦 ⧗ ci-local [3/8] lint · 2m05s`, `🚦 ◌ ci-local queued ·
 //   behind erp-ci`, then `🚦 ✓ ci-local passed · 4m12s` / `🚦 ✗ ci-local failed
 //   at lint` until the next run (🚦 is ci-local's own emoji, see BRAND).
+//   A run already over when a session starts is shown only if no session
+//   showed its result yet, like a message not yet delivered (staleAtStart).
 // - Cards and the agent: only for runs this session started, as Gentle AI's job
 //   notices go only to the session that started the job: a run that names this
 //   session (PI_SESSION_ID, from its bash tool), or, naming none, one whose
@@ -37,8 +39,12 @@ import {
   eventsFileFor,
   findProject,
   footerText,
+  FINISHED,
+  markDelivered,
   ownsRun,
+  readDelivered,
   readRun,
+  staleAtStart,
 } from './core.js'
 
 const KEY = 'ci-local'
@@ -119,7 +125,7 @@ export default function ciLocal(pi: ExtensionAPI) {
     timer = undefined
   }
 
-  pi.on('session_start', async (_event, ctx: ExtensionContext) => {
+  pi.on('session_start', async (event, ctx: ExtensionContext) => {
     stop()
     runActive = false
     if (!ctx.hasUI) return
@@ -148,6 +154,16 @@ export default function ciLocal(pi: ExtensionAPI) {
       return owned.get(run.key)
     }
 
+    // A run already over when the session starts, whose result a session
+    // already showed, stays out of the status line (see staleAtStart); the
+    // next run shows as usual.
+    let stale: string | null = null
+    try {
+      stale = staleAtStart(readRun(file), { reason: event.reason, delivered: readDelivered(file) })
+    } catch {
+      // a half-written file: a run in progress, shown as usual
+    }
+
     const tick = () => {
       let run
       try {
@@ -155,10 +171,13 @@ export default function ciLocal(pi: ExtensionAPI) {
       } catch {
         return // a half-written file: the next tick reads it whole
       }
-      const footer = run ? footerText(run.state) : undefined
+      const footer = run && run.key !== stale ? footerText(run.state) : undefined
       if (footer !== shown) {
         ctx.ui.setStatus(KEY, footer)
         shown = footer
+        // A finished run shown is a result delivered: a later session of this
+        // repository leaves it out (see staleAtStart).
+        if (run && footer && FINISHED.has(run.state.state)) markDelivered(file, run.key)
       }
       // Only this session's own runs get cards and reach the agent, as Gentle
       // AI's job notices go only to the session that started the job. Another
