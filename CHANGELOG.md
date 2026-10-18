@@ -20,6 +20,15 @@ their `release x.y.z:` commit messages.
   kept. (#2)
 - A wrong `CI_LOCAL_QUEUE_TIMEOUT` or `CI_LOCAL_QUEUE_NOTICE` (not a whole
   number of seconds) is a usage error, status 2, before anything is queued.
+- Deviations: the `start`, `ok` and `fail` events of a step marked
+  `--deviates` carry `deviates` (the reason), and `end` carries `deviations`
+  (how many such steps started; `0` when none). A passed `--status` block,
+  and so the Pi end card, adds `· 1 deviation (pnpm run test:integration)`
+  to its last line (`2 deviations (a, b)`; from three, the first two and `…`).
+  Events from before this show as they did. (#18)
+- The `queued` and `run` events carry `ancestors`: the pids above ci-local
+  when it started, its parent first, up to but not with pid 1, at most 32
+  (`[]` when `ps` cannot say). (#20)
 
 ### Fixed
 
@@ -37,6 +46,12 @@ their `release x.y.z:` commit messages.
   asking every second. Events and tickets without a start time (older runs)
   keep the pid-only check. `lock/pid` has the pid on its first line, as
   before, and the start time on its second. (#3)
+- Pi extension: a run orphaned since it started (`nohup`, `setsid`, a Gentle
+  AI background job) is now the session's own. A run that names no session
+  is the session's when its recorded `ancestors` include Pi's process; one
+  with none recorded (before 0.6.0) is still decided by its live process
+  tree. The pids are not checked against start times, so a reused pid of Pi
+  could, rarely, show an old run's card once too often. (#20)
 
 ## 0.5.3
 

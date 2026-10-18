@@ -771,6 +771,7 @@ CURRENT_STEP="" # the name of the step running, for an interrupt
 CURRENT_LOG=""
 CURRENT_MS=""
 CURRENT_FIELDS=""
+DEVIATIONS=0 # steps that ran another command than their workflow step, started so far
 
 print_summary() {
   local i n=0 line
@@ -833,6 +834,11 @@ run_plan() {
     if [[ $QUIET -eq 1 ]]; then
       CURRENT_LOG="$(step_log $((n + 1)) "${PLAN_NAMES[$i]}")"
       CURRENT_FIELDS+=",\"log\":$(json_string "$CURRENT_LOG")"
+    fi
+    # On every event of the step, so --status can say it without the plan.
+    if [[ -n "${PLAN_DEVIATES[$i]}" ]]; then
+      CURRENT_FIELDS+=",\"deviates\":$(json_string "${PLAN_DEVIATES[$i]}")"
+      DEVIATIONS=$((DEVIATIONS + 1))
     fi
     emit_event "" "\"event\":\"start\",$CURRENT_FIELDS"
     CURRENT_MS=${EV_MS:-} # the start event's time: the step's durationMs counts from it
@@ -1111,7 +1117,7 @@ emit_queued() {
   local by=null
   [[ -z "$BLOCK_PROJECT" ]] ||
     by="{\"project\":$(json_string "$BLOCK_PROJECT"),\"pid\":${BLOCK_PID:-null}}"
-  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ahead\":$AHEAD,\"blockedBy\":$by"
+  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ancestors\":$RUN_ANCESTORS,\"ahead\":$AHEAD,\"blockedBy\":$by"
 }
 
 # Waits for the turn, and takes the lock. Prints what it waits for when that
@@ -1229,7 +1235,7 @@ finish() {
     else
       result=failed # a failing step, or a development stack that changed
     fi
-    emit_event "$RUN_MS" "\"event\":\"end\",\"result\":\"$result\",\"devStack\":\"$dev_stack\""
+    emit_event "$RUN_MS" "\"event\":\"end\",\"result\":\"$result\",\"devStack\":\"$dev_stack\",\"deviations\":$DEVIATIONS"
   fi
   # Last: the next run's turn comes when the teardown and the end event are done.
   queue_release
@@ -1279,6 +1285,24 @@ fi
 # bash tool PI_SESSION_ID): the Pi extension shows a run to that session alone.
 RUN_SESSION=null
 [[ -z "${PI_SESSION_ID:-}" ]] || RUN_SESSION="$(json_string "$PI_SESSION_ID")"
+# The pids above this process, nearest first, up to (not with) pid 1: the
+# Pi extension tells a run its session started from one that lost its parents
+# since (nohup, setsid), while the session is still an ancestor. At most 32.
+ancestor_pids() {
+  local pid=$PPID out="" n=0 seen=" "
+  while [[ "$pid" =~ ^[0-9]+$ ]] && [[ $pid -gt 1 && $n -lt 32 ]]; do
+    [[ "$seen" != *" $pid "* ]] || break # a loop: stop
+    seen+="$pid "
+    out+="${out:+,}$pid"
+    n=$((n + 1))
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null)" || break
+    pid=${pid//[[:space:]]/}
+  done
+  printf '[%s]' "$out"
+}
+# Not looked up without an events file: nothing would read it.
+RUN_ANCESTORS='[]'
+[[ -z "$EVENTS" ]] || RUN_ANCESTORS="$(ancestor_pids)"
 RUN_LOG_DIR=null
 # This process's start time, recorded next to its pid (see pid_start); null
 # when ps cannot say, and the pid alone then identifies the run.
@@ -1389,7 +1413,7 @@ PLAN_STARTED=1
 # RUN_MS: the run event's time, from which the end event's durationMs counts.
 # pid and pidStart: --status tells a run still going from one killed before its
 # end event, and from another process that was given its pid since.
-emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION"
+emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ancestors\":$RUN_ANCESTORS"
 RUN_MS=${EV_MS:-}
 # Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
 # subshells included, and host steps rely on it.

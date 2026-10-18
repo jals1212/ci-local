@@ -226,6 +226,64 @@ test('--status says when the development stack was left alone', () => {
   assert.match(out, /\n> 1 step · 3s · every step passed · Development stack untouched\.\n$/)
 })
 
+const deviating = (step, index, reason = 'leaves out a spec') => [
+  { ts: runEvent().ts, event: 'start', step, index, total: 3, deviates: reason },
+  { ts: runEvent().ts, event: 'ok', step, index, total: 3, durationMs: 5, deviates: reason },
+]
+
+test('--status names a step that deviates from its workflow step, on the summary line', () => {
+  const file = eventsFile([
+    runEvent({ total: 3 }),
+    ...deviating('pnpm run test:integration', 1),
+    { ts: runEvent().ts, event: 'end', result: 'passed', durationMs: 3000, devStack: 'untouched', deviations: 1 },
+  ])
+  const { status: code, out } = status(['--events', file])
+  assert.equal(code, 0)
+  const lines = out.trimEnd().split('\n')
+  assert.equal(lines.length, 3, out)
+  assert.equal(lines[2], '> 3 steps · 3s · every step passed · 1 deviation (pnpm run test:integration) · Development stack untouched.')
+})
+
+test('--status lists the first two deviating steps, then …', () => {
+  const end = (deviations) => ({ ts: runEvent().ts, event: 'end', result: 'passed', durationMs: 3000, deviations })
+  const two = eventsFile([runEvent({ total: 3 }), ...deviating('a', 1), ...deviating('b', 2), end(2)])
+  assert.equal(status(['--events', two]).out.trimEnd().split('\n')[2], '> 3 steps · 3s · every step passed · 2 deviations (a, b).')
+  const three = eventsFile([runEvent({ total: 3 }), ...deviating('a', 1), ...deviating('b', 2), ...deviating('c', 3), end(3)])
+  assert.equal(status(['--events', three]).out.trimEnd().split('\n')[2], '> 3 steps · 3s · every step passed · 3 deviations (a, b, …).')
+})
+
+test('--status names a deviating step once, though its start and ok both carry the reason', () => {
+  const file = eventsFile([
+    runEvent({ total: 1 }),
+    ...deviating('a', 1),
+    { ts: runEvent().ts, event: 'end', result: 'passed', durationMs: 3000, deviations: 1 },
+  ])
+  assert.match(status(['--events', file]).out, /every step passed · 1 deviation \(a\)\.\n$/)
+})
+
+test('--status of events from before deviations (no deviates, no deviations) says what it did', () => {
+  const file = eventsFile([
+    runEvent({ total: 1 }),
+    { ts: runEvent().ts, event: 'start', step: 'a', index: 1, total: 1 },
+    { ts: runEvent().ts, event: 'ok', step: 'a', index: 1, total: 1, durationMs: 5 },
+    { ts: runEvent().ts, event: 'end', result: 'passed', durationMs: 3000, devStack: 'untouched' },
+  ])
+  assert.match(status(['--events', file]).out, /\n> 1 step · 3s · every step passed · Development stack untouched\.\n$/)
+})
+
+test('--status with "deviations": 0 on end says nothing of deviations', () => {
+  const file = eventsFile([runEvent({ total: 1 }), { ts: runEvent().ts, event: 'end', result: 'passed', durationMs: 3000, deviations: 0 }])
+  assert.match(status(['--events', file]).out, /\n> 1 step · 3s · every step passed\.\n$/)
+})
+
+test('a real run with a deviating step: --status names it', async () => {
+  const dir = project(["ci_step box One 'true'", "ci_step box 'npm run e2e' --deviates 'leaves out a spec' 'true'"])
+  const cache = mkdtempSync(join(tmpdir(), 'c-'))
+  const { status: ran, err } = await run([], { cwd: dir, cache })
+  assert.equal(ran, 0, err)
+  assert.match(status([], { cwd: dir, cache }).out, /\n> 2 steps · \d+s · every step passed · 1 deviation \(npm run e2e\)\.\n$/)
+})
+
 test('--status without an events file: says so, status 2', () => {
   const dir = project(["ci_step box One 'true'"])
   const { status: code, out, err } = status([], { cwd: dir })
