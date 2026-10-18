@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.6.0
+
 ### Added
 
 - Queue: `CI_LOCAL_QUEUE_TIMEOUT` (whole seconds, default `0`: no limit). A
