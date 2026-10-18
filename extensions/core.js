@@ -168,17 +168,19 @@ export const CARD_GRACE_MS = 10_000
  * notice, in one turn, instead of each opening one.
  */
 export function createCardQueue({ isAlive = alive, now = Date.now } = {}) {
-  let pending = null
+  // Every ended run, oldest first: a second end never drops the first card.
+  const pending = []
   return {
     add(run) {
-      pending = { run, since: now() }
+      pending.push({ run, since: now() })
     },
+    /** The oldest card, once its run's process is gone or its wait is over. */
     take() {
-      if (!pending) return null
-      if (isAlive(pending.run.state.pid) && now() - pending.since < CARD_GRACE_MS) return null
-      const { run } = pending
-      pending = null
-      return run
+      const [first] = pending
+      if (!first) return null
+      if (isAlive(first.run.state.pid) && now() - first.since < CARD_GRACE_MS) return null
+      pending.shift()
+      return first.run
     },
   }
 }

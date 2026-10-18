@@ -193,3 +193,19 @@ test('the card queue holds an ended run until its process exits, or 10 seconds a
   clock += 1
   assert.equal(queue.take(), run, 'at 10 seconds, deliver anyway')
 })
+
+test('the card queue keeps every ended run, in order: a second end never drops the first card', () => {
+  const clock = 1_000
+  const living = new Set([1, 2])
+  const queue = createCardQueue({ isAlive: (pid) => living.has(pid), now: () => clock })
+  const first = { state: { pid: 1, state: 'failed' } }
+  const second = { state: { pid: 2, state: 'passed' } }
+  queue.add(first)
+  queue.add(second)
+  living.delete(2) // the second run's process is gone first
+  assert.equal(queue.take(), null, 'the first card still waits for its run: order is kept')
+  living.delete(1)
+  assert.equal(queue.take(), first)
+  assert.equal(queue.take(), second)
+  assert.equal(queue.take(), null)
+})
