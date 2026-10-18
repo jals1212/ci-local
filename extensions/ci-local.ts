@@ -3,6 +3,10 @@
 //
 // - Footer: `🐳 ci-local [3/8] lint · 2m05s`, `⏳ queued · behind erp-ci`,
 //   then `✅ passed · 4m12s` / `❌ failed at lint` until the next run.
+// - Cards and the agent: only for runs this session started (its bash tool, or
+//   a background job of it), as Gentle AI's job notices go only to the session
+//   that started the job. Another session's run in the same repository, or one
+//   started in a terminal, shows in the status line alone.
 // - When a run starts: a card in the transcript when it is starting (or
 //   waiting for its turn), another when its steps start; for you only (session
 //   entries, never in the model's context, never repeated after a reload).
@@ -31,6 +35,7 @@ import {
   eventsFileFor,
   findProject,
   footerText,
+  launchedBy,
   readRun,
 } from './core.js'
 
@@ -132,6 +137,14 @@ export default function ciLocal(pi: ExtensionAPI) {
     delivery = ends
     let shown: string | undefined
 
+    // Whether each run seen in flight is this session's own (decided once, while
+    // its process is alive: see launchedBy).
+    const owned = new Map<string, boolean>()
+    const ownsRun = (run: NonNullable<ReturnType<typeof readRun>>) => {
+      if (!owned.has(run.key)) owned.set(run.key, launchedBy(run.state.pid, process.pid))
+      return owned.get(run.key)
+    }
+
     const tick = () => {
       let run
       try {
@@ -144,21 +157,27 @@ export default function ciLocal(pi: ExtensionAPI) {
         ctx.ui.setStatus(KEY, footer)
         shown = footer
       }
-      const phase = tracker.phase(run)
-      if (phase) {
-        try {
-          pi.appendEntry<StartCard>(START_KEY, { key: run.key, phase, lines: run.block.lines })
-        } catch {
-          // A start card is for show: never a reason to stop following the run.
+      // Only this session's own runs get cards and reach the agent, as Gentle
+      // AI's job notices go only to the session that started the job. Another
+      // session's run in this repository shows in the status line alone. What
+      // is owed for an earlier own run is delivered either way.
+      if (run && ownsRun(run)) {
+        const phase = tracker.phase(run)
+        if (phase) {
+          try {
+            pi.appendEntry<StartCard>(START_KEY, { key: run.key, phase, lines: run.block.lines })
+          } catch {
+            // A start card is for show: never a reason to stop following the run.
+          }
         }
-      }
-      if (tracker.observe(run)) {
-        const state = run.state.state
-        ctx.ui.notify(
-          `ci-local ${state} · ${found.project}`,
-          state === 'passed' ? 'info' : state === 'failed' ? 'error' : 'warning'
-        )
-        ends.ended(run)
+        if (tracker.observe(run)) {
+          const state = run.state.state
+          ctx.ui.notify(
+            `ci-local ${state} · ${found.project}`,
+            state === 'passed' ? 'info' : state === 'failed' ? 'error' : 'warning'
+          )
+          ends.ended(run)
+        }
       }
       deliver()
     }

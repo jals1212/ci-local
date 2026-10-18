@@ -2,6 +2,7 @@
 // follows, the footer line, and when a run it watched has ended. The
 // rendering and the states are those of `ci-local --status` (status.js).
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
@@ -93,6 +94,31 @@ export function readRun(file, options) {
 }
 
 export const FINISHED = new Set(['passed', 'failed', 'stopped'])
+
+/** The parent of a live process, or null when it is gone (or unknown). */
+export function parentPid(pid) {
+  const out = spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' })
+  const ppid = Number.parseInt(out.stdout, 10)
+  return out.status === 0 && Number.isInteger(ppid) ? ppid : null
+}
+
+/**
+ * True when the process `pid` descends from `ancestor`: a run this session
+ * started (its bash tool, or a background job of it) and so one it owns, as
+ * Gentle AI's background jobs belong to the session that started them. A run
+ * of another session in the same repository, or one started in a terminal,
+ * is not, and neither is a process that is gone.
+ */
+export function launchedBy(pid, ancestor, { parentOf = parentPid } = {}) {
+  const seen = new Set()
+  let current = parentOf(pid)
+  while (current !== null && current > 1 && !seen.has(current)) {
+    if (current === ancestor) return true
+    seen.add(current)
+    current = parentOf(current)
+  }
+  return false
+}
 
 /** One short line for the footer. */
 export function footerText(state) {

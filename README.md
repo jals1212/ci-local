@@ -349,6 +349,12 @@ runs ci-local or Docker itself:
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).
+- **Only the session's own runs** get the cards and the notification, and
+  reach the agent: runs this session started, with its bash tool or as a
+  background job (their process descends from the session's). A run started
+  by another session in the same repository, or in a terminal, shows in the
+  status line alone, as Gentle AI's background-job notices go only to the
+  session that started the job.
 - **When a run starts**: a card in the transcript when it is starting, or
   waiting for its turn (`⏳ ci-local · queued · behind erp-ci`), and another
   when its steps start (`🐳 ci-local · running · [1/14] …`). They are for you

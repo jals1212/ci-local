@@ -67,6 +67,11 @@ their `release x.y.z:` commit messages.
   busy without a run (compacting) it waits. A delivery that fails is retried
   (every 30 seconds, 3 times, then at the next turn boundary), never
   dropped.
+- The Pi extension announces only the session's own runs (a process that
+  descends from the session's): cards, notification and the agent. Another
+  session's run in the same repository, or a terminal's, updates the status
+  line alone. Two Pi sessions in one repository each got the other's end
+  card before.
 - Pi start cards: when a run is starting (or waiting for its turn) and when
   its steps start, a card in the transcript for the user only (session
   entries, never in the model's context, not repeated after a reload).
