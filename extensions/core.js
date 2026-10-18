@@ -137,6 +137,7 @@ export function cardContent(block, project) {
  */
 export function createTracker() {
   const inFlight = new Set()
+  const shown = new Set() // `${key}#${phase}` of every start card shown
   return {
     observe(run) {
       if (!run) return false
@@ -146,41 +147,130 @@ export function createTracker() {
       }
       return inFlight.delete(run.key)
     },
+    /**
+     * The start card a run is due, once each: 'starting' while it waits for its
+     * turn or starts, then 'started' once it runs its steps; null otherwise. A
+     * run first seen already running is due 'started' only.
+     */
+    phase(run) {
+      if (!run || FINISHED.has(run.state.state)) return null
+      const due = run.state.state === 'running' ? 'started' : 'starting'
+      const key = `${run.key}#${due}`
+      if (shown.has(key) || (due === 'starting' && shown.has(`${run.key}#started`))) return null
+      shown.add(key)
+      return due
+    },
+    /** A start card already in the session (before a reload): not shown again. */
+    remember(key, phase) {
+      shown.add(`${key}#${phase}`)
+    },
   }
 }
 
 /**
- * How the end card reaches the agent: an idle agent is woken to act on the
- * result; a busy one gets it within its current work (steer), not once the
- * whole task is over as a follow-up would.
+ * Where the end card can go now, as Gentle AI routes a background job's exit
+ * notice: 'idle' (no run: wake the agent), 'run' (in an agent run, which spans
+ * agent_start to agent_settled: steer it in), or 'hold' (busy without a run,
+ * as when compacting: keep the card until a later tick or boundary). The
+ * host's idle flag wins over a missed lifecycle event.
  */
-export function deliveryFor(idle) {
-  return idle ? { triggerTurn: true } : { deliverAs: 'steer' }
+export function routeFor({ idle, runActive }) {
+  if (idle) return 'idle'
+  return runActive ? 'run' : 'hold'
 }
 
-/** The longest an ended run's card waits for the run's process to exit. */
+/** The longest a stored card waits for its run's process to exit before the wake. */
 export const CARD_GRACE_MS = 10_000
 
 /**
- * Holds the card of an ended run until its process has exited (the cleanup
- * after the end event, then the exit), CARD_GRACE_MS at most. A run started
- * with a background job then reaches the agent with that job's own exit
- * notice, in one turn, instead of each opening one.
+ * After the run's process has exited, the wait before ci-local wakes an idle
+ * agent itself: a run started as a background job gets that job's own exit
+ * notice first, and the stored card rides along with it.
  */
-export function createCardQueue({ isAlive = alive, now = Date.now } = {}) {
-  // Every ended run, oldest first: a second end never drops the first card.
-  const pending = []
+export const WAKE_GRACE_MS = 2_000
+
+/** The wait before a delivery that failed is tried again. */
+export const CARD_RETRY_MS = 30_000
+
+/** Timed retries in a row; past them a delivery waits for an agent boundary. */
+export const CARD_RETRY_LIMIT = 3
+
+/** The hidden message that wakes an idle agent for the cards stored before it. */
+export const WAKE_TEXT =
+  'The ci-local Pi extension: a run you saw start has ended; its card is above. Act on its result if your task needs it.'
+
+/**
+ * How an action reaches the agent, as Gentle AI hands content to a parent:
+ * - store: an idle agent gets the card in its conversation without a turn;
+ * - steer: an agent in a run gets it before its next model call;
+ * - wake: one hidden message then wakes an idle agent for what was stored.
+ */
+export function deliveryOptions(action) {
+  return action.kind === 'store' ? { triggerTurn: false } : { deliverAs: 'steer', triggerTurn: true }
+}
+
+/**
+ * The end cards of the runs a session saw, and the wake they owe, as Gentle
+ * AI delivers a child's content to its parent (gentle-agents):
+ * - idle agent: each card is stored at once, at the end event; one hidden wake
+ *   follows, WAKE_GRACE_MS after the last run's process has exited
+ *   (CARD_GRACE_MS after the card at most), unless a run started meanwhile,
+ *   which already carries the stored cards;
+ * - agent in a run: each card is steered in at once;
+ * - busy without a run (compacting): everything waits.
+ * A delivery that failed is tried again first, every CARD_RETRY_MS,
+ * CARD_RETRY_LIMIT times in a row, then only after an agent boundary.
+ *
+ * next() hands out one action at a time; the caller reports it with done() or
+ * failed().
+ */
+export function createDelivery({ isAlive = alive, now = Date.now } = {}) {
+  const cards = [] // ended runs, oldest first
+  let wake = null // { pid, since, exitSeenAt } owed to an idle agent
+  let failures = 0
+  let retryAt = 0 // nothing before this; Infinity: until a boundary
+
+  const wakeDue = () => {
+    if (!wake) return false
+    if (now() - wake.since >= CARD_GRACE_MS) return true
+    if (isAlive(wake.pid)) return false
+    wake.exitSeenAt ??= now()
+    return now() - wake.exitSeenAt >= WAKE_GRACE_MS
+  }
+
   return {
-    add(run) {
-      pending.push({ run, since: now() })
+    ended(run) {
+      cards.push(run)
     },
-    /** The oldest card, once its run's process is gone or its wait is over. */
-    take() {
-      const [first] = pending
-      if (!first) return null
-      if (isAlive(first.run.state.pid) && now() - first.since < CARD_GRACE_MS) return null
-      pending.shift()
-      return first.run
+    next({ idle, runActive }) {
+      if (now() < retryAt) return null
+      const route = routeFor({ idle, runActive })
+      if (route === 'hold') return null
+      if (route === 'run') {
+        wake = null // the run carries every stored card
+        return cards.length ? { kind: 'steer', run: cards.shift() } : null
+      }
+      if (cards.length) return { kind: 'store', run: cards.shift() }
+      if (wakeDue()) {
+        wake = null
+        return { kind: 'wake' }
+      }
+      return null
+    },
+    done(action) {
+      failures = 0
+      if (action.kind === 'store') wake = { pid: action.run.state.pid, since: now(), exitSeenAt: null }
+    },
+    failed(action) {
+      if (action.kind === 'wake') wake = { pid: null, since: -Infinity, exitSeenAt: null }
+      else cards.unshift(action.run)
+      failures += 1
+      retryAt = failures > CARD_RETRY_LIMIT ? Infinity : now() + CARD_RETRY_MS
+    },
+    /** An agent boundary: what waited may go now, with a fresh retry count. */
+    boundary() {
+      failures = 0
+      retryAt = 0
     },
   }
 }
