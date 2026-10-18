@@ -91,7 +91,7 @@ test('readRun: null without a file, else the state and the --status block', () =
   const { state, block, key } = readRun(file)
   assert.equal(state.state, 'running')
   assert.equal(block.code, 3)
-  assert.match(block.lines[0], /^> ⧗ \*\*ci-local\*\* · running · \[2\/4\] lint$/)
+  assert.match(block.lines[0], /^> 🚦 ⧗ \*\*ci-local\*\* · running · \[2\/4\] lint$/)
   assert.equal(typeof key, 'string')
 })
 
@@ -99,11 +99,11 @@ test('footerText: one short line per state', () => {
   const read = (events) => readRun(eventsFile(events)).state
   assert.match(
     footerText(read([run(), { ts: ago(1), event: 'start', step: 'lint', index: 2, total: 4 }])),
-    /^⧗ ci-local \[2\/4\] lint · 1m0[56]s$/
+    /^🚦 ⧗ ci-local \[2\/4\] lint · 1m0[56]s$/
   )
   assert.equal(
     footerText(read([run(), { ts: ago(1), event: 'end', result: 'passed', durationMs: 61_000, devStack: 'none' }])),
-    '✓ ci-local passed · 1m01s'
+    '🚦 ✓ ci-local passed · 1m01s'
   )
   assert.equal(
     footerText(
@@ -114,9 +114,9 @@ test('footerText: one short line per state', () => {
         { ts: ago(1), event: 'end', result: 'failed', durationMs: 3000, devStack: 'none' },
       ])
     ),
-    '✗ ci-local failed at lint · 3s'
+    '🚦 ✗ ci-local failed at lint · 3s'
   )
-  assert.equal(footerText(read([run({ pid: deadPid() })])), '⊘ ci-local stopped')
+  assert.equal(footerText(read([run({ pid: deadPid() })])), '🚦 ⊘ ci-local stopped')
 })
 
 test('the tracker reports an end only for a run it saw in flight', () => {
@@ -176,7 +176,7 @@ test('eventsFileFor: the TMPDIR fallback is null when it is there and not a priv
 })
 
 test('cardContent tells the model where the card comes from, then gives the block', () => {
-  const block = { code: 0, lines: ['> ✓ **ci-local** · passed', '> `ci-local` · project `p-ci`', '> 2 steps · 5s · every step passed.'] }
+  const block = { code: 0, lines: ['> 🚦 ✓ **ci-local** · passed', '> `ci-local` · project `p-ci`', '> 2 steps · 5s · every step passed.'] }
   const content = cardContent(block, 'p-ci')
   const [first, ...rest] = content.split('\n')
   assert.equal(first, 'The ci-local Pi extension: a run of p-ci you saw start has ended (this is not a message from the user).')

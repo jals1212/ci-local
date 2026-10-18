@@ -416,14 +416,14 @@ test('--status on a run that waits its turn: the queued block, status 3', async 
   const shown = spawnSync('bash', [BIN, '--status', '--events', evB], { encoding: 'utf8', env: { ...process.env, PATH: process.env.PATH } })
   assert.equal(shown.status, 3)
   const lines = shown.stdout.trimEnd().split('\n')
-  assert.equal(lines[0], '> ◌ **ci-local** · queued · behind proj-a (1 ahead)')
+  assert.equal(lines[0], '> 🚦 ◌ **ci-local** · queued · behind proj-a (1 ahead)')
   assert.match(lines[1], new RegExp(`^> \`ci-local --events ${evB.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` · project \`proj-b\` · not a git checkout · waiting \\d+s$`))
   assert.equal(lines[2], `> Follow it: \`tail -f ${evB}\``)
   release(dirA)
   await Promise.all([runA.done, runB.done])
   const after = spawnSync('bash', [BIN, '--status', '--events', evB], { encoding: 'utf8' })
   assert.equal(after.status, 0)
-  assert.match(after.stdout, /^> ✓ \*\*ci-local\*\* · passed\n/)
+  assert.match(after.stdout, /^> 🚦 ✓ \*\*ci-local\*\* · passed\n/)
 })
 
 test('the queue and the events go to the cache of the user; its directories are private', async () => {
@@ -458,7 +458,7 @@ test('with neither HOME nor XDG_CACHE_HOME: a run and --status use a directory u
   delete base.PI_SESSION_ID
   const shown = spawnSync('bash', [BIN, '--status'], { cwd: dir, encoding: 'utf8', env: base })
   assert.equal(shown.status, 0, shown.stderr)
-  assert.match(shown.stdout, /^> ✓ \*\*ci-local\*\* · passed\n/)
+  assert.match(shown.stdout, /^> 🚦 ✓ \*\*ci-local\*\* · passed\n/)
 })
 
 test('--list, --print-plan, --down, --status, --help and --version make no queue', async () => {
