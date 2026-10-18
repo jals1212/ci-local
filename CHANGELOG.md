@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.5.1
+
 ### Fixed
 
 - Pi status line: a session that starts no longer shows a run whose result
