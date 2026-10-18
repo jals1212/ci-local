@@ -345,18 +345,33 @@ test('launchedBy: a run is this session’s when its process descends from this 
   // pid → parent pid: 900 is Pi; 950 the shell of a background job; 1000 the run.
   const parents = new Map([[1000, 950], [950, 900], [900, 1], [2000, 1990], [1990, 1]])
   const parentOf = (pid) => parents.get(pid) ?? null
-  assert.equal(launchedBy(1000, 900, { parentOf }), true)
-  assert.equal(launchedBy(2000, 900, { parentOf }), false, 'another session’s, or a terminal’s')
-  assert.equal(launchedBy(3000, 900, { parentOf }), false, 'gone: its parents are unknown')
-  assert.equal(launchedBy(900, 900, { parentOf }), false, 'the session itself is no run')
+  const isAlive = (pid) => parents.has(pid) // the processes of this made-up tree, nothing else
+  assert.equal(launchedBy(1000, 900, { parentOf, isAlive }), true)
+  assert.equal(launchedBy(2000, 900, { parentOf, isAlive }), false, 'another session’s, or a terminal’s')
+  assert.equal(launchedBy(3000, 900, { parentOf, isAlive }), false, 'gone: its parents are unknown')
+  assert.equal(launchedBy(900, 900, { parentOf, isAlive }), false, 'the session itself is no run')
 })
 
 test('launchedBy: a parent chain that loops ends the walk', () => {
   const parentOf = (pid) => ({ 10: 11, 11: 10 })[pid] ?? null
-  assert.equal(launchedBy(10, 900, { parentOf }), false)
+  assert.equal(launchedBy(10, 900, { parentOf, isAlive: () => true }), false)
 })
 
 test('parentPid reads the parent of a live process, and null for one that is gone', () => {
   assert.equal(parentPid(process.pid), process.ppid)
   assert.equal(parentPid(deadPid()), null)
+})
+
+test('launchedBy: when the run’s parents cannot be read while it lives, the run counts as this session’s (no card is lost)', () => {
+  const alive = () => true
+  // ps failed for the live run itself: unknown, not foreign.
+  assert.equal(launchedBy(1000, 900, { parentOf: () => null, isAlive: alive }), true)
+  // ps cannot run at all (undefined): unknown, not foreign.
+  assert.equal(launchedBy(1000, 900, { parentOf: () => undefined, isAlive: alive }), true)
+  // A run that is gone has no knowable parents: not this session's.
+  assert.equal(launchedBy(1000, 900, { parentOf: () => null, isAlive: () => false }), false)
+})
+
+test('parentPid is undefined, not null, when ps cannot run', () => {
+  assert.equal(parentPid(process.pid, { ps: '/no/such/ps' }), undefined)
 })

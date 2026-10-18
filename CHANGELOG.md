@@ -72,6 +72,8 @@ their `release x.y.z:` commit messages.
   session's run in the same repository, or a terminal's, updates the status
   line alone. Two Pi sessions in one repository each got the other's end
   card before.
+  When `ps` cannot tell a live run's parents, the run counts as the
+  session's own: a card shown twice rather than one lost.
 - Pi start cards: when a run is starting (or waiting for its turn) and when
   its steps start, a card in the transcript for the user only (session
   entries, never in the model's context, not repeated after a reload).

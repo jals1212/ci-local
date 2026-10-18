@@ -95,9 +95,13 @@ export function readRun(file, options) {
 
 export const FINISHED = new Set(['passed', 'failed', 'stopped'])
 
-/** The parent of a live process, or null when it is gone (or unknown). */
-export function parentPid(pid) {
-  const out = spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' })
+/**
+ * The parent of a live process; null when the process is gone, undefined when
+ * `ps` cannot run here (so its parents cannot be known).
+ */
+export function parentPid(pid, { ps = 'ps' } = {}) {
+  const out = spawnSync(ps, ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' })
+  if (out.error) return undefined
   const ppid = Number.parseInt(out.stdout, 10)
   return out.status === 0 && Number.isInteger(ppid) ? ppid : null
 }
@@ -107,12 +111,15 @@ export function parentPid(pid) {
  * started (its bash tool, or a background job of it) and so one it owns, as
  * Gentle AI's background jobs belong to the session that started them. A run
  * of another session in the same repository, or one started in a terminal,
- * is not, and neither is a process that is gone.
+ * is not, and neither is a process that is gone. When the parents of a live
+ * run cannot be read (`ps` missing or failing), the run counts as this
+ * session's: a card shown twice is better than one lost.
  */
-export function launchedBy(pid, ancestor, { parentOf = parentPid } = {}) {
-  const seen = new Set()
+export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = alive } = {}) {
   let current = parentOf(pid)
-  while (current !== null && current > 1 && !seen.has(current)) {
+  if (current === undefined || (current === null && isAlive(pid))) return true
+  const seen = new Set()
+  while (current !== null && current !== undefined && current > 1 && !seen.has(current)) {
     if (current === ancestor) return true
     seen.add(current)
     current = parentOf(current)
