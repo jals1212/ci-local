@@ -5,6 +5,92 @@ Each release of `@jals1212/ci-local`. Versions follow
 options and a patch version fixes. Releases before 0.3.0 are described in
 their `release x.y.z:` commit messages.
 
+## 0.4.0
+
+### Added
+
+- `--status`: the state of the last run (running, passed, failed or stopped)
+  as three lines of Markdown, from its events file: the step under way and
+  how long it has run, or the failing step, its exit code and log, and
+  whether the development stack was left alone. Exit status 0 passed,
+  1 failed, 2 no run recorded, 3 running, 4 stopped. Needs no Docker; with
+  `--events FILE`, no config either.
+- Events by default: without `--events`, a run writes them to
+  `~/.cache/ci-local/<project>.ndjson` (under `XDG_CACHE_HOME` when set) and
+  names the file at the start; one it cannot write is a warning, not a
+  stop. `CI_LOCAL_EVENTS=off` writes none.
+- Event fields: `run` carries `version`, `pid`, `commit`, `args` and
+  `logDir`; `start`, `ok` and `fail` carry the step's `log` with `--quiet`;
+  `end` carries `devStack` (`untouched`, `changed`, `none`). Existing fields
+  are unchanged.
+- A machine-wide queue: runs of every project take their turn, first come
+  first served, so Docker has one at a time. A run that has to wait prints
+  `Waiting for <project> (pid <pid>) · <n> ahead` (again only when that
+  changes) and `Queue: your turn after <time>`. `--no-wait` exits with the new
+  status 3 (`ci-local: the machine is busy: ...`) instead of waiting;
+  `CI_LOCAL_QUEUE=off` lets runs overlap; `CI_LOCAL_QUEUE_DIR` and
+  `CI_LOCAL_QUEUE_POLL` name the directory (default
+  `~/.cache/ci-local/queue`) and the polling interval. An interrupt while
+  waiting leaves the queue and exits 130 or 143 with no cleanup; tickets and
+  locks of dead processes are ignored.
+- A `queued` event, written as soon as the run starts and again when whom it
+  waits for changes (`project`, `version`, `pid`, `commit`, `args`, `logDir`,
+  `ahead`, `blockedBy`), so `--status` never has a gap before the `run` event.
+  `--status` shows `queued` (⏳) and `starting` (🐳), both with exit status 3.
+- An events file still written by a live run of the same project is left to
+  it: a second run takes it over only at its turn (without the queue, it
+  writes no events and says so). Taking it (checking that no live run owns
+  it, emptying it, writing the first event) happens in one step under a
+  `<file>.claim` directory, so two runs that start together cannot both take
+  it; a claim older than 10 seconds is a crashed run's and is broken.
+- The `TMPDIR` fallback cache (`$TMPDIR/ci-local-<uid>`, used without
+  `XDG_CACHE_HOME` and `HOME`) is refused when it already exists and is not a
+  real directory of the user that no one else can write: the run neither
+  queues nor writes events, and `--status` exits 2. Its `ci-local`
+  directory is checked the same way once it exists, so one planted after
+  the first check is caught before anything is written in it.
+- Where no `<file>.claim` can be made at all (a writable `--events` file in
+  a directory the user cannot write), the file is taken without a claim, as
+  before 0.4.0. A stale claim that cannot be removed is given up at once
+  (the run writes no events and says so) instead of being retried forever.
+- The Pi extension takes a relative `CI_LOCAL_EVENTS` from the repository
+  root, and follows nothing when runs write no events (`CI_LOCAL_EVENTS=off`,
+  or a refused `TMPDIR` fallback cache) instead of showing an old run (#4);
+  `ci-local --status` says so and exits 2 instead of showing one.
+- With `--quiet`, an `--events` file that cannot be written (status 2) no
+  longer leaves an empty step-log directory in `TMPDIR`.
+- `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.
+- The Pi end card tells the model it comes from the ci-local extension;
+  without that line a model took the bare block for a message from the
+  user. The transcript shows the card as before.
+- README: why the time in `--status` and the card (to the end of the
+  cleanup) differs from the summary's `total` (the steps alone).
+- `status.js` can be imported by a process whose `argv[1]` is no file
+  (`node -e`, an embedder) without throwing (#5).
+- A run refused by `--no-wait` records nothing, so `--status` keeps showing
+  the project's last run (#6).
+- README: where to install (the CLI in each repository, the Pi package once),
+  keeping a machine's repositories on 0.4.x together, an environment variable
+  reference, the exit statuses of a run and of `--status`, and the files
+  ci-local leaves in the cache.
+- A Pi package (`pi install npm:@jals1212/ci-local`): an extension that shows
+  the run of the session's repository in the footer (queued, running with its
+  step, then the result), notifies when a run it saw in flight ends and puts
+  the `--status` block in the transcript (a follow-up for a busy agent, plain
+  context for an idle one), plus a `ci_local_status` tool; and a `ci-local`
+  skill with the rules for running and waiting on ci-local, without any
+  branch policy. The Pi dependencies are optional peers.
+
+### Changed
+
+- Concurrent runs now wait their turn by default (see the queue above); use
+  `CI_LOCAL_QUEUE=off` for the old behaviour.
+- The `run` event is written when the run has its turn, after the `queued`
+  event; the summary's total no longer counts the wait.
+- Without `XDG_CACHE_HOME` nor `HOME` the cache is a private directory under
+  `TMPDIR` (it used to be an error); directories ci-local creates in the
+  cache have mode 700.
+
 ## 0.3.0
 
 ### Added

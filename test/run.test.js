@@ -38,9 +38,19 @@ function ciLocal(args, { cwd, env = {} }) {
     const base = { ...process.env }
     delete base.CI_LOCAL_QUIET
     delete base.CI_LOCAL_EVENTS
+    delete base.CI_LOCAL_QUEUE
+    delete base.CI_LOCAL_QUEUE_POLL
     child = spawn('bash', [BIN, ...args], {
       cwd,
-      env: { ...base, PATH: `${FAKE_DOCKER}:${process.env.PATH}`, ...env },
+      env: {
+        ...base,
+        // The default events file goes under it: never the real ~/.cache.
+        XDG_CACHE_HOME: mkdtempSync(join(tmpdir(), 'ci-local-cache-')),
+        // The queue too: never the real one, which other runs may hold.
+        CI_LOCAL_QUEUE_DIR: mkdtempSync(join(tmpdir(), 'ci-local-queue-')),
+        PATH: `${FAKE_DOCKER}:${process.env.PATH}`,
+        ...env,
+      },
     })
     const lines = []
     let out = ''
@@ -151,6 +161,7 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   assert.deepEqual(
     events.map(({ event, step }) => [event, step ?? null]),
     [
+      ['queued', null],
       ['run', null],
       ['start', 'Setup'],
       ['ok', 'Setup'],
@@ -159,9 +170,41 @@ test('--events writes one JSON object per milestone, in order, with --only and -
       ['end', null],
     ]
   )
-  const [run, start, ok] = events
-  assert.deepEqual(Object.keys(run).sort(), ['event', 'jobs', 'project', 'total', 'ts'])
+  const [queued, run, start, ok] = events
+  assert.deepEqual(Object.keys(run).sort(), [
+    'args',
+    'commit',
+    'event',
+    'jobs',
+    'logDir',
+    'pid',
+    'project',
+    'total',
+    'ts',
+    'version',
+  ])
+  assert.deepEqual(Object.keys(queued).sort(), [
+    'ahead',
+    'args',
+    'blockedBy',
+    'commit',
+    'event',
+    'logDir',
+    'pid',
+    'project',
+    'ts',
+    'version',
+  ])
+  assert.equal(queued.project, 'ci-local-selftest')
+  assert.equal(queued.pid, run.pid)
+  assert.deepEqual([queued.ahead, queued.blockedBy], [0, null], 'nobody else is running')
+  assert.deepEqual([queued.args, queued.commit, queued.logDir, queued.version], [run.args, run.commit, run.logDir, run.version])
   assert.equal(run.project, 'ci-local-selftest')
+  assert.deepEqual(run.args, ['--only', 'a', '--skip', 'audit', '--keep', '--events', file])
+  assert.equal(run.commit, null, 'not a git checkout')
+  assert.equal(run.logDir, null, 'not --quiet')
+  assert.equal(typeof run.pid, 'number')
+  assert.match(run.version, /^\d+\.\d+\.\d+$/)
   assert.deepEqual(run.jobs, ['a'])
   assert.equal(run.total, 2)
   assert.deepEqual(Object.keys(start).sort(), ['event', 'index', 'step', 'total', 'ts'])
@@ -170,8 +213,9 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   assert.equal(typeof ok.durationMs, 'number')
   assert.ok(ok.durationMs >= 0)
   const end = events.at(-1)
-  assert.deepEqual(Object.keys(end).sort(), ['durationMs', 'event', 'result', 'ts'])
+  assert.deepEqual(Object.keys(end).sort(), ['devStack', 'durationMs', 'event', 'result', 'ts'])
   assert.equal(end.result, 'passed')
+  assert.equal(end.devStack, 'none', 'no compose container of this checkout')
   for (const event of events) assert.match(event.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
   const times = events.map((event) => Date.parse(event.ts))
   assert.deepEqual(times, [...times].sort((x, y) => x - y))
@@ -186,15 +230,16 @@ test('--events marks the failing step, its exit code and a failed end', async ()
   assert.deepEqual(
     events.map(({ event, step }) => [event, step ?? null]),
     [
+      ['queued', null],
       ['run', null],
       ['start', 'Breaks'],
       ['fail', 'Breaks'],
       ['end', null],
     ]
   )
-  assert.equal(events[2].exitCode, 4)
-  assert.equal(typeof events[2].durationMs, 'number')
-  assert.equal(events[3].result, 'failed')
+  assert.equal(events[3].exitCode, 4)
+  assert.equal(typeof events[3].durationMs, 'number')
+  assert.equal(events[4].result, 'failed')
 })
 
 test('CI_LOCAL_QUIET and CI_LOCAL_EVENTS do what the options do; a relative path is the caller’s', async () => {
@@ -208,7 +253,7 @@ test('CI_LOCAL_QUIET and CI_LOCAL_EVENTS do what the options do; a relative path
   assert.doesNotMatch(out, /\ntalking\n/)
   assert.deepEqual(
     readEvents(join(dir, 'sub', 'events.ndjson')).map((event) => event.event),
-    ['run', 'start', 'ok', 'end']
+    ['queued', 'run', 'start', 'ok', 'end']
   )
 })
 
@@ -231,10 +276,10 @@ test('an interrupted step: the summary still reaches the terminal, and the event
     const events = readEvents(file)
     assert.deepEqual(
       events.map(({ event }) => event),
-      ['run', 'start', 'fail', 'end']
+      ['queued', 'run', 'start', 'fail', 'end']
     )
-    assert.equal(events[2].exitCode, 143)
-    assert.equal(events[3].result, 'interrupted')
+    assert.equal(events[3].exitCode, 143)
+    assert.equal(events[4].result, 'interrupted')
   }
 })
 
@@ -273,4 +318,15 @@ test('--events needs a file name', async () => {
   const { status, err } = await ciLocal(['--events', '--list'], { cwd: project(["ci_step box X 'true'"]) })
   assert.equal(status, 2)
   assert.match(err, /--events needs a file/)
+})
+
+test('--quiet with an --events file that cannot be written leaves no log directory behind', async () => {
+  const dir = project(["ci_step box X 'true'"])
+  const tmp = mkdtempSync(join(tmpdir(), 'ci-local-tmp-'))
+  const { status, err } = await ciLocal(['--quiet', '--events', join(dir, 'no-such-dir', 'e.ndjson')], {
+    cwd: dir,
+    env: { TMPDIR: tmp },
+  })
+  assert.equal(status, 2, err)
+  assert.deepEqual(readdirSync(tmp), [], 'no ci-local-selftest-logs.* directory left in TMPDIR')
 })

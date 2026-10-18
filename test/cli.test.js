@@ -15,7 +15,9 @@ const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FIXTURE = fileURLToPath(new URL('./fixture/', import.meta.url))
 
 function ciLocal(args, { cwd = FIXTURE, env = {} } = {}) {
-  const result = spawnSync('bash', [BIN, ...args], { cwd, encoding: 'utf8', env: { ...process.env, ...env } })
+  // Cache and queue in fresh directories: never the real ones.
+  const scratch = { XDG_CACHE_HOME: mkdtempSync(join(tmpdir(), 'ci-local-cache-')), CI_LOCAL_QUEUE_DIR: mkdtempSync(join(tmpdir(), 'ci-local-queue-')) }
+  const result = spawnSync('bash', [BIN, ...args], { cwd, encoding: 'utf8', env: { ...process.env, ...scratch, ...env } })
   return { status: result.status, out: result.stdout, err: result.stderr }
 }
 
@@ -87,9 +89,16 @@ test('--help documents every option, with or without a config', () => {
   for (const cwd of [FIXTURE, tmpdir()]) {
     const { status, out } = ciLocal(['--help'], { cwd })
     assert.equal(status, 0)
-    for (const option of ['--only', '--skip', '--keep', '--down', '--rebuild', '--list', '--print-plan', '--version', '--quiet', '--events']) {
+    for (const option of ['--only', '--skip', '--keep', '--down', '--rebuild', '--list', '--print-plan', '--version', '--quiet', '--events', '--status']) {
       assert.match(out, new RegExp(`\\n  ${option}\\b`), option)
     }
+    for (const text of ['--no-wait', 'CI_LOCAL_QUEUE=off', 'CI_LOCAL_QUEUE_DIR', '3 busy with --no-wait']) assert.ok(out.includes(text), text)
+  }
+})
+
+test('--no-wait changes nothing for the options that run no step', () => {
+  for (const args of [['--list'], ['--print-plan'], ['--only', 'tests', '--list']]) {
+    assert.deepEqual(ciLocal([...args, '--no-wait']), ciLocal(args), args.join(' '))
   }
 })
 
