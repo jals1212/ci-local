@@ -7,6 +7,10 @@
 # `npm stage approve <id>`, or on npmjs.com). A pushed tag alone publishes
 # nothing.
 #
+# Once staged, the release job creates the GitHub release of the tag, its
+# notes the version's section of CHANGELOG.md (an existing release is left
+# alone).
+#
 # One-time setup on npmjs.com: the package's Settings -> Trusted publisher ->
 # GitHub Actions, repository jals1212/ci-local, workflow release.yml, with
 # "Allow npm publish" and "Allow npm dist-tag" left unchecked.
@@ -35,6 +39,7 @@ jobs:
           version="$(node -p 'require("./package.json").version')"
           [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "::error::Tag $GITHUB_REF_NAME, package.json $version"; exit 1; }
           grep -q "^CI_LOCAL_VERSION=\"$version\"$" bin/ci-local || { echo "::error::bin/ci-local is not at $version"; exit 1; }
+          grep -q "^## $version$" CHANGELOG.md || { echo "::error::CHANGELOG.md has no ## $version section"; exit 1; }
       - run: npm ci
       - run: npm run lint
       - run: npm test
@@ -42,3 +47,23 @@ jobs:
         run: |
           npm stage --help >/dev/null 2>&1 || { echo "::error::npm $(npm -v) has no npm stage"; exit 1; }
           npm stage publish --provenance --access public
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The GitHub release, with the version's CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "The release $GITHUB_REF_NAME exists: left alone."
+            exit 0
+          fi
+          awk -v v="$version" '$0=="## "v{on=1;next} on&&/^## /{exit} on' CHANGELOG.md | sed -e '/./,$!d' > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no notes for $version"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$version" --notes-file notes.md
