@@ -7,12 +7,24 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.5.2
+
 ### Fixed
 
 - Pi status line: after a reload, a run the session had left out at its start
   (already delivered by another session) stays out; before, it showed again.
-  The delivered marker now also names every session that showed the run (a
-  0.5.1 marker, the run alone, still reads).
+  Each session now records the runs it showed in its own file, under
+  `<events file>.delivered.d/`, so two sessions that see a run end at once
+  never overwrite each other; a file unused for 30 days is removed. The
+  0.5.1 marker (`<events file>.delivered`) still reads.
+- Pi extension: the status line's logic moved to `core.js`
+  (`createStatusLine`), tested across sessions and reloads; a new test loads
+  the extension itself with a stand-in Pi (Node 22.6 and later).
+
+### Changed
+
+- Releases: the release workflow also creates the GitHub release of the
+  tag, with the version's section of this file as its notes.
 
 ## 0.5.1
 
