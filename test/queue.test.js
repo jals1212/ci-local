@@ -12,8 +12,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   realpathSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -25,6 +27,9 @@ import { fileURLToPath } from 'node:url'
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
 chmodSync(join(FAKE_DOCKER, 'docker'), 0o755)
+
+// Root ignores directory permissions: tests that rely on them cannot run as root.
+const asRoot = process.getuid?.() === 0 && 'root ignores directory permissions'
 
 const scratch = (prefix = 'q-') => mkdtempSync(join(tmpdir(), `ci-local-${prefix}`))
 
@@ -128,51 +133,61 @@ test('two runs: the second waits for the first’s end, says whom it waits for, 
   const evA = eventsOf()
   const evB = eventsOf()
   const runA = start(['--events', evA], { cwd: dirA, queue })
-  await until(() => existsSync(join(dirA, 'started')))
-  const pidA = kinds(evA, 'run')[0].pid
-  // The first run's ticket and lock say who holds the machine.
-  const [ticket] = tickets(queue)
-  assert.equal(tickets(queue).length, 1)
-  assert.equal(ticket.slice(-10), pad(pidA, 10))
-  assert.equal(readFileSync(join(queue, ticket), 'utf8'), `project=proj-a\npid=${pidA}\nrepo=${realpathSync(dirA)}\n`)
-  assert.equal(readFileSync(join(queue, 'lock', 'pid'), 'utf8').trim(), String(pidA))
+  let runB
+  try {
+    await until(() => existsSync(join(dirA, 'started')))
+    const pidA = kinds(evA, 'run')[0].pid
+    // The first run's ticket and lock say who holds the machine.
+    const [ticket] = tickets(queue)
+    assert.equal(tickets(queue).length, 1)
+    assert.equal(ticket.slice(-10), pad(pidA, 10))
+    assert.equal(readFileSync(join(queue, ticket), 'utf8'), `project=proj-a\npid=${pidA}\nrepo=${realpathSync(dirA)}\n`)
+    assert.equal(readFileSync(join(queue, 'lock', 'pid'), 'utf8').trim(), String(pidA))
 
-  const runB = start(['--events', evB], { cwd: dirB, queue })
-  await until(() => runB.out.includes('Waiting for '))
-  // Polled a few times meanwhile: the line is not repeated, nothing ran.
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  assert.deepEqual(waitingLines(runB.out), [`Waiting for proj-a (pid ${pidA}) · 1 ahead`])
-  assert.equal(existsSync(join(dirB, 'ran')), false)
-  assert.deepEqual(kinds(evB, 'run'), [])
-  assert.equal(tickets(queue).length, 2)
+    runB = start(['--events', evB], { cwd: dirB, queue })
+    await until(() => runB.out.includes('Waiting for '))
+    // Polled a few times meanwhile: the line is not repeated, nothing ran.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    assert.deepEqual(waitingLines(runB.out), [`Waiting for proj-a (pid ${pidA}) · 1 ahead`])
+    assert.equal(existsSync(join(dirB, 'ran')), false)
+    assert.deepEqual(kinds(evB, 'run'), [])
+    assert.equal(tickets(queue).length, 2)
 
-  release(dirA)
-  const [a, b] = await Promise.all([runA.done, runB.done])
-  assert.equal(a.status, 0, a.err)
-  assert.equal(b.status, 0, b.err)
-  assert.ok(at(evB, 'start') >= at(evA, 'end'), 'B’s first step starts after A’s end')
-  assert.ok(at(evB, 'run') >= at(evA, 'end'))
-  assert.match(b.out, /\nQueue: your turn after \d+s\n/)
-  assert.doesNotMatch(a.out, /Waiting for |Queue: your turn/)
-  assert.ok(b.out.indexOf('Queue: your turn') < b.out.indexOf('ci-local 0.4.0: 1 steps'), 'before the banner')
-  // queued: what B saw when it queued, and that it then got its turn.
-  assert.deepEqual(
-    kinds(evB, 'queued').map((event) => [event.ahead, event.blockedBy]),
-    [
-      [1, { project: 'proj-a', pid: pidA }],
-      [0, null],
-    ]
-  )
-  const [first] = kinds(evB, 'queued')
-  assert.equal(first.project, 'proj-b')
-  assert.equal(first.pid, kinds(evB, 'run')[0].pid)
-  assert.deepEqual(first.args, ['--events', evB])
-  assert.deepEqual(
-    events(evB).map((event) => event.event),
-    ['queued', 'queued', 'run', 'start', 'ok', 'end']
-  )
-  // Nothing of either run is left in the queue.
-  assert.deepEqual(readdirSync(queue), [])
+    release(dirA)
+    const [a, b] = await Promise.all([runA.done, runB.done])
+    assert.equal(a.status, 0, a.err)
+    assert.equal(b.status, 0, b.err)
+    assert.ok(at(evB, 'start') >= at(evA, 'end'), 'B’s first step starts after A’s end')
+    assert.ok(at(evB, 'run') >= at(evA, 'end'))
+    assert.match(b.out, /\nQueue: your turn after \d+s\n/)
+    assert.doesNotMatch(a.out, /Waiting for |Queue: your turn/)
+    assert.ok(b.out.indexOf('Queue: your turn') < b.out.indexOf('ci-local 0.4.0: 1 steps'), 'before the banner')
+    // queued: what B saw when it queued, and that it then got its turn.
+    assert.deepEqual(
+      kinds(evB, 'queued').map((event) => [event.ahead, event.blockedBy]),
+      [
+        [1, { project: 'proj-a', pid: pidA }],
+        [0, null],
+      ]
+    )
+    const [first] = kinds(evB, 'queued')
+    assert.equal(first.project, 'proj-b')
+    assert.equal(first.pid, kinds(evB, 'run')[0].pid)
+    assert.deepEqual(first.args, ['--events', evB])
+    assert.deepEqual(
+      events(evB).map((event) => event.event),
+      ['queued', 'queued', 'run', 'start', 'ok', 'end']
+    )
+    // Nothing of either run is left in the queue.
+    assert.deepEqual(readdirSync(queue), [])
+  } catch (error) {
+    // Seen failing once in about 40 runs and never reproduced: say everything.
+    const dump = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '(none)')
+    error.message += `\n--- A out:\n${runA.out}\n--- A err:\n${runA.err}\n--- A events:\n${dump(evA)}`
+    error.message += `\n--- B out:\n${runB?.out}\n--- B err:\n${runB?.err}\n--- B events:\n${dump(evB)}`
+    error.message += `\n--- queue: ${existsSync(queue) ? readdirSync(queue).join(' ') : '(none)'}`
+    throw error
+  }
 })
 
 test('a third run keeps its place: A, then B, then C; it re-announces whom it waits for', async () => {
@@ -268,6 +283,9 @@ test('--no-wait behind a running run: status 3 naming it; the run itself is not 
   const dirB = project('proj-b', [WORK])
   const evA = eventsOf()
   const evB = eventsOf()
+  // B's last run, which a refused --no-wait must leave for --status.
+  const previous = '{"ts":"2026-01-01T00:00:00.000Z","event":"run","project":"proj-b","pid":1}\n{"ts":"2026-01-01T00:00:01.000Z","event":"end","result":"passed","durationMs":1000}\n'
+  writeFileSync(evB, previous)
   const runA = start(['--events', evA], { cwd: dirA, queue })
   await until(() => existsSync(join(dirA, 'started')))
   const pidA = kinds(evA, 'run')[0].pid
@@ -278,10 +296,7 @@ test('--no-wait behind a running run: status 3 naming it; the run itself is not 
   assert.doesNotMatch(b.out, /Waiting for/)
   assert.equal(existsSync(join(dirB, 'ran')), false)
   assert.deepEqual(tickets(queue), before, 'B’s ticket is gone')
-  assert.deepEqual(
-    events(evB).map((event) => event.event),
-    ['queued']
-  )
+  assert.equal(readFileSync(evB, 'utf8'), previous, 'a refused run leaves the events file alone')
   release(dirA)
   assert.equal((await runA.done).status, 0)
 })
@@ -464,4 +479,215 @@ test('a queue directory that cannot be made is a warning: the run goes on withou
   assert.equal(status, 0, err)
   assert.match(err, /ci-local: cannot use the queue directory .*: running without waiting\n/)
   assert.equal(existsSync(join(dir, 'ran')), true)
+})
+
+/** The events in a project's default events file under `cache`. */
+const defaultEvents = (cache, name) =>
+  readFileSync(join(cache, 'ci-local', `${name}.ndjson`), 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+
+/** The pids of the runs that wrote these events (only queued and run carry one). */
+const writers = (events) => [...new Set(events.filter((event) => 'pid' in event).map((event) => event.pid))]
+
+const statusIn = (cache, cwd) =>
+  spawnSync('bash', [BIN, '--status'], { cwd, encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } })
+
+test('a second run of the same project does not take over the events file of the one in flight', async () => {
+  const queue = scratch('queue-')
+  const cache = scratch('cache-')
+  const dirA = project('same-ci', [GATE])
+  const dirB = project('same-ci', [WORK])
+  const a = start([], { cwd: dirA, queue, env: { XDG_CACHE_HOME: cache } })
+  await until(() => existsSync(join(dirA, 'started')))
+  const b = start([], { cwd: dirB, queue, env: { XDG_CACHE_HOME: cache } })
+  await until(() => b.out.includes('Waiting for same-ci'))
+
+  // While B waits, the file is still A's alone, and --status shows A running.
+  const during = defaultEvents(cache, 'same-ci')
+  assert.deepEqual(writers(during), [a.child.pid])
+  assert.ok(during.some((event) => event.event === 'run'))
+  const shown = statusIn(cache, dirA)
+  assert.equal(shown.status, 3, shown.stdout + shown.stderr)
+  assert.match(shown.stdout, /running · \[1\/1\] Gate/)
+
+  writeFileSync(join(dirA, 'release'), '')
+  assert.equal((await a.done).status, 0)
+  assert.equal((await b.done).status, 0)
+  // Once B had its turn, the file is B's alone, from its first event to its end.
+  const after = defaultEvents(cache, 'same-ci')
+  assert.deepEqual(writers(after), [b.child.pid])
+  assert.equal(after[0].event, 'queued')
+  assert.equal(after.at(-1).event, 'end')
+  assert.equal(after.at(-1).result, 'passed')
+})
+
+test('CI_LOCAL_QUEUE=off: a second run of the same project leaves the live events file alone, and says so', async () => {
+  const queue = scratch('queue-')
+  const cache = scratch('cache-')
+  const dirA = project('same-ci', [GATE])
+  const dirB = project('same-ci', [WORK])
+  const env = { XDG_CACHE_HOME: cache, CI_LOCAL_QUEUE: 'off' }
+  const a = start([], { cwd: dirA, queue, env })
+  await until(() => existsSync(join(dirA, 'started')))
+  const b = start([], { cwd: dirB, queue, env })
+  const doneB = await b.done
+  assert.equal(doneB.status, 0, doneB.err)
+  assert.match(doneB.err, new RegExp(`ci-local: the events file .* belongs to run ${a.child.pid}, still going: this run writes no events\\n`))
+  writeFileSync(join(dirA, 'release'), '')
+  assert.equal((await a.done).status, 0)
+  const events = defaultEvents(cache, 'same-ci')
+  assert.deepEqual(writers(events), [a.child.pid])
+  assert.equal(events.at(-1).result, 'passed')
+})
+
+test('the TMPDIR fallback is refused when it is not a private directory of this user: no events, no queue', async () => {
+  const fallback = (tmp) => join(tmp, `ci-local-${process.getuid()}`)
+  const env = (tmp) => ({ HOME: undefined, XDG_CACHE_HOME: undefined, CI_LOCAL_QUEUE_DIR: undefined, TMPDIR: tmp })
+
+  // Someone else's directory, planted as a symlink at the fallback path.
+  const symTmp = scratch('tmpdir-')
+  const planted = scratch('planted-')
+  symlinkSync(planted, fallback(symTmp))
+  // A directory any user can write.
+  const openTmp = scratch('tmpdir-')
+  mkdirSync(fallback(openTmp))
+  chmodSync(fallback(openTmp), 0o777)
+
+  for (const [tmp, inside] of [
+    [symTmp, planted],
+    [openTmp, fallback(openTmp)],
+  ]) {
+    const dir = project('proj-a', [WORK])
+    const { status, out, err } = await start([], { cwd: dir, queue: undefined, env: env(tmp) }).done
+    assert.equal(status, 0, err)
+    assert.match(err, /ci-local: .*ci-local-\d+ is not a private directory of this user: no events file, no queue\n/)
+    assert.doesNotMatch(out, /\nEvents: /)
+    assert.deepEqual(readdirSync(inside), [], 'nothing written there')
+    assert.equal(existsSync(join(dir, 'ran')), true, 'the run itself goes on')
+  }
+})
+
+test('a run claims the events file under <file>.claim: it waits for a held claim, then takes the file', async () => {
+  const queue = scratch('queue-')
+  const cache = scratch('cache-')
+  const dir = project('claim-ci', [WORK])
+  const file = join(cache, 'ci-local', 'claim-ci.ndjson')
+  mkdirSync(join(cache, 'ci-local'), { recursive: true })
+  writeFileSync(file, '{"left":"by whoever holds the claim"}\n')
+  mkdirSync(`${file}.claim`) // held, fresh: another run between its check and its first event
+
+  const run = start([], { cwd: dir, queue, env: { XDG_CACHE_HOME: cache } })
+  // The queue lock is taken just before the first queued event, which is
+  // when the run claims the file: from here it can only be waiting.
+  await until(() => existsSync(join(queue, 'lock', 'pid')))
+  assert.equal(readFileSync(file, 'utf8'), '{"left":"by whoever holds the claim"}\n', 'untouched while claimed')
+  assert.equal(existsSync(join(dir, 'ran')), false)
+
+  const released = Date.now()
+  rmSync(`${file}.claim`, { recursive: true })
+  const { status, err } = await run.done
+  assert.equal(status, 0, err)
+  const events = defaultEvents(cache, 'claim-ci')
+  assert.equal(events[0].event, 'queued')
+  assert.equal(events[0].pid, run.child.pid)
+  assert.ok(Date.parse(events[0].ts) >= released - 5, 'its first event came after the claim was given back')
+  assert.equal(existsSync(`${file}.claim`), false, 'the claim is given back')
+})
+
+test('a claim left by a dead run (older than 10 seconds) is broken', async () => {
+  const cache = scratch('cache-')
+  const dir = project('claim-ci', [WORK])
+  const file = join(cache, 'ci-local', 'claim-ci.ndjson')
+  mkdirSync(`${file}.claim`, { recursive: true })
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.claim`, old, old)
+  const started = Date.now()
+  const { status, err } = await start([], { cwd: dir, queue: scratch('queue-'), env: { XDG_CACHE_HOME: cache } }).done
+  assert.equal(status, 0, err)
+  assert.ok(Date.now() - started < 5000, 'promptly')
+  assert.equal(defaultEvents(cache, 'claim-ci').at(-1).result, 'passed')
+})
+
+test('an events file whose directory takes no .claim: the run writes it without a claim, as before 0.4.0', { skip: asRoot }, async () => {
+  const dir = project('claim-ci', [WORK])
+  const locked = scratch('locked-')
+  const file = join(locked, 'events.ndjson')
+  writeFileSync(file, '')
+  chmodSync(locked, 0o555) // the file stays writable; nothing can be made beside it
+  try {
+    const started = Date.now()
+    const { status, err } = await start(['--events', file], { cwd: dir, queue: scratch('queue-') }).done
+    assert.equal(status, 0, err)
+    assert.ok(Date.now() - started < 4000, `took ${Date.now() - started}ms: no 10-second wait for a claim that cannot be made`)
+    const events = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    assert.equal(events[0].event, 'queued')
+    assert.equal(events.at(-1).result, 'passed')
+    assert.equal(existsSync(join(dir, 'ran')), true)
+  } finally {
+    chmodSync(locked, 0o755)
+  }
+})
+
+test('a stale claim that cannot be removed does not spin: the run gives it up at once', { skip: asRoot }, async () => {
+  const dir = project('claim-ci', [WORK])
+  const locked = scratch('locked-')
+  const file = join(locked, 'events.ndjson')
+  writeFileSync(file, '')
+  mkdirSync(`${file}.claim`)
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.claim`, old, old)
+  chmodSync(locked, 0o555) // the stale claim can be neither moved nor removed
+  try {
+    const started = Date.now()
+    const { status, err } = await start(['--events', file], { cwd: dir, queue: scratch('queue-') }).done
+    assert.equal(status, 0, err)
+    assert.ok(Date.now() - started < 4000, `took ${Date.now() - started}ms`)
+    assert.match(err, /ci-local: cannot claim the events file .*events\.ndjson: this run writes no events\n/)
+    assert.equal(existsSync(join(dir, 'ran')), true)
+  } finally {
+    chmodSync(locked, 0o755)
+  }
+})
+
+test('in the TMPDIR fallback, a ci-local directory inside that others can write is refused too', async () => {
+  const tmp = scratch('tmpdir-')
+  const base = join(tmp, `ci-local-${process.getuid()}`)
+  mkdirSync(join(base, 'ci-local'), { recursive: true })
+  chmodSync(base, 0o700)
+  chmodSync(join(base, 'ci-local'), 0o777)
+  const dir = project('proj-a', [WORK])
+  const env = { HOME: undefined, XDG_CACHE_HOME: undefined, CI_LOCAL_QUEUE_DIR: undefined, TMPDIR: tmp }
+  const { status, out, err } = await start([], { cwd: dir, queue: undefined, env }).done
+  assert.equal(status, 0, err)
+  assert.doesNotMatch(out, /\nEvents: /)
+  assert.deepEqual(readdirSync(join(base, 'ci-local')), [], 'nothing written there')
+  assert.equal(existsSync(join(dir, 'ran')), true)
+})
+
+test('CI_LOCAL_QUEUE_POLL of 0 (or anything not above 0) falls back to 2 seconds: no busy loop while waiting', async () => {
+  for (const poll of ['0', '0.0']) {
+    const queue = scratch('queue-')
+    const dirA = project('proj-a', [GATE])
+    const dirB = project('proj-b', [WORK])
+    const a = start([], { cwd: dirA, queue })
+    await until(() => existsSync(join(dirA, 'started')))
+    // B under a shell that reports, with `times`, the CPU its children used:
+    // the waiting run and every process it starts.
+    const base = { ...process.env, XDG_CACHE_HOME: scratch('cache-'), CI_LOCAL_QUEUE_DIR: queue, CI_LOCAL_QUEUE_POLL: poll, PATH: `${FAKE_DOCKER}:${process.env.PATH}` }
+    const b = spawn('bash', ['-c', 'bash "$0"; times', BIN], { cwd: dirB, env: base })
+    children.push(b)
+    let out = ''
+    b.stdout.on('data', (chunk) => (out += chunk))
+    const doneB = new Promise((resolve) => b.on('close', resolve))
+    await until(() => out.includes('Waiting for '))
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    release(dirA)
+    assert.equal((await a.done).status, 0)
+    await doneB
+    const seconds = (text) => text.split(/\s+/).reduce((sum, t) => sum + Number(t.replace(/^(\d+)m([\d.]+)s$/, (_, m, sec) => String(Number(m) * 60 + Number(sec)))), 0)
+    const childrenCpu = seconds(out.trim().split('\n').at(-1))
+    assert.ok(childrenCpu < 1, `CI_LOCAL_QUEUE_POLL=${poll}: the waiting run used ${childrenCpu}s of CPU (a busy loop)`)
+  }
 })

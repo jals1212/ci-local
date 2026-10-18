@@ -16,7 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { Box, Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 
-import { createTracker, eventsFileFor, findProject, footerText, readRun } from './core.js'
+import { cardContent, createTracker, eventsFileFor, findProject, footerText, readRun } from './core.js'
 
 const KEY = 'ci-local'
 const POLL_MS = 1000
@@ -50,7 +50,11 @@ export default function ciLocal(pi: ExtensionAPI) {
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const found = findProject(ctx.cwd)
       if (!found) throw new Error(`no ci-local.config.sh with a literal CI_PROJECT at or above ${ctx.cwd}`)
-      const file = eventsFileFor(found.project)
+      const file = eventsFileFor(found.project, process.env, found.repo)
+      if (!file) {
+        const text = `No events file to follow for ${found.project}: CI_LOCAL_EVENTS is off, or the TMPDIR fallback cache is not a private directory of this user.`
+        return { content: [{ type: 'text', text }], details: undefined }
+      }
       const run = readRun(file)
       const text = run ? run.block.lines.join('\n') : `No ci-local run recorded for ${found.project} (${file}).`
       return { content: [{ type: 'text', text }], details: run ? { state: run.state.state } : undefined }
@@ -67,7 +71,8 @@ export default function ciLocal(pi: ExtensionAPI) {
     if (!ctx.hasUI) return
     const found = findProject(ctx.cwd)
     if (!found) return
-    const file = eventsFileFor(found.project)
+    const file = eventsFileFor(found.project, process.env, found.repo)
+    if (!file) return // CI_LOCAL_EVENTS=off, or no private cache: runs write no events
     const tracker = createTracker()
     let shown: string | undefined
 
@@ -89,7 +94,7 @@ export default function ciLocal(pi: ExtensionAPI) {
         `ci-local ${state} · ${found.project}`,
         state === 'passed' ? 'info' : state === 'failed' ? 'error' : 'warning'
       )
-      const card = { customType: KEY, content: run.block.lines.join('\n'), display: true, details: { state, lines: run.block.lines } }
+      const card = { customType: KEY, content: cardContent(run.block, found.project), display: true, details: { state, lines: run.block.lines } }
       // Idle: appended and shown now, in the context of the next turn, no turn
       // spent ('nextTurn' would hide it until then). Busy: a follow-up the
       // agent handles when its current work settles.

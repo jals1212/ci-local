@@ -37,6 +37,42 @@ their `release x.y.z:` commit messages.
   waits for changes (`project`, `version`, `pid`, `commit`, `args`, `logDir`,
   `ahead`, `blockedBy`), so `--status` never has a gap before the `run` event.
   `--status` shows `queued` (⏳) and `starting` (🐳), both with exit status 3.
+- An events file still written by a live run of the same project is left to
+  it: a second run takes it over only at its turn (without the queue, it
+  writes no events and says so). Taking it (checking that no live run owns
+  it, emptying it, writing the first event) happens in one step under a
+  `<file>.claim` directory, so two runs that start together cannot both take
+  it; a claim older than 10 seconds is a crashed run's and is broken.
+- The `TMPDIR` fallback cache (`$TMPDIR/ci-local-<uid>`, used without
+  `XDG_CACHE_HOME` and `HOME`) is refused when it already exists and is not a
+  real directory of the user that no one else can write: the run neither
+  queues nor writes events, and `--status` exits 2. Its `ci-local`
+  directory is checked the same way once it exists, so one planted after
+  the first check is caught before anything is written in it.
+- Where no `<file>.claim` can be made at all (a writable `--events` file in
+  a directory the user cannot write), the file is taken without a claim, as
+  before 0.4.0. A stale claim that cannot be removed is given up at once
+  (the run writes no events and says so) instead of being retried forever.
+- The Pi extension takes a relative `CI_LOCAL_EVENTS` from the repository
+  root, and follows nothing when runs write no events (`CI_LOCAL_EVENTS=off`,
+  or a refused `TMPDIR` fallback cache) instead of showing an old run (#4);
+  `ci-local --status` says so and exits 2 instead of showing one.
+- With `--quiet`, an `--events` file that cannot be written (status 2) no
+  longer leaves an empty step-log directory in `TMPDIR`.
+- `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.
+- The Pi end card tells the model it comes from the ci-local extension;
+  without that line a model took the bare block for a message from the
+  user. The transcript shows the card as before.
+- README: why the time in `--status` and the card (to the end of the
+  cleanup) differs from the summary's `total` (the steps alone).
+- `status.js` can be imported by a process whose `argv[1]` is no file
+  (`node -e`, an embedder) without throwing (#5).
+- A run refused by `--no-wait` records nothing, so `--status` keeps showing
+  the project's last run (#6).
+- README: where to install (the CLI in each repository, the Pi package once),
+  keeping a machine's repositories on 0.4.x together, an environment variable
+  reference, the exit statuses of a run and of `--status`, and the files
+  ci-local leaves in the cache.
 - A Pi package (`pi install npm:@jals1212/ci-local`): an extension that shows
   the run of the session's repository in the footer (queued, running with its
   step, then the result), notifies when a run it saw in flight ends and puts

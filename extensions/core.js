@@ -2,8 +2,8 @@
 // follows, the footer line, and when a run it watched has ended. The
 // rendering and the states are those of `ci-local --status` (status.js).
 
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
+import { dirname, isAbsolute, join } from 'node:path'
 
 import { duration, lastRun, render, runState } from '../status.js'
 
@@ -33,14 +33,46 @@ export function findProject(cwd, env = process.env) {
   }
 }
 
-/** The events file a run of `project` writes, as bin/ci-local decides it. */
-export function eventsFileFor(project, env = process.env) {
+/** True for a real directory (no symlink) of this user that no one else can write. */
+function privateDir(path) {
+  try {
+    const stat = lstatSync(path)
+    return stat.isDirectory() && stat.uid === process.getuid?.() && (stat.mode & 0o022) === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The events file a run of `project` writes, as bin/ci-local decides it, or
+ * null when there is none to follow (CI_LOCAL_EVENTS=off, or a refused
+ * TMPDIR fallback). A relative CI_LOCAL_EVENTS is taken from
+ * `repo` (bin/ci-local takes it from where it runs: the repository root, as
+ * a rule). The TMPDIR fallback, a fixed name in a shared directory, is null
+ * when it is there and is not a private directory of this user, as
+ * bin/ci-local then writes no events.
+ */
+export function eventsFileFor(project, env = process.env, repo = process.cwd()) {
   const named = env.CI_LOCAL_EVENTS
-  if (named && !['0', 'off', 'false', 'no'].includes(named)) return named
-  let cache = env.XDG_CACHE_HOME
-  if (!cache && env.HOME) cache = join(env.HOME, '.cache')
-  if (!cache) cache = `${(env.TMPDIR || '/tmp').replace(/\/+$/, '')}/ci-local-${process.getuid?.() ?? 0}`
-  return join(cache, 'ci-local', `${project}.ndjson`)
+  if (['0', 'off', 'false', 'no'].includes(named)) return null // runs write no events file
+  if (named) return isAbsolute(named) ? named : join(repo, named)
+  if (env.XDG_CACHE_HOME) return join(env.XDG_CACHE_HOME, 'ci-local', `${project}.ndjson`)
+  if (env.HOME) return join(env.HOME, '.cache', 'ci-local', `${project}.ndjson`)
+  const fallback = `${(env.TMPDIR || '/tmp').replace(/\/+$/, '')}/ci-local-${process.getuid?.() ?? 0}`
+  const own = join(fallback, 'ci-local')
+  // What exists of it now must be ours alone (bin/ci-local checks the same).
+  for (const dir of [fallback, own]) {
+    if ((existsSync(dir) || isSymlink(dir)) && !privateDir(dir)) return null
+  }
+  return join(own, `${project}.ndjson`)
+}
+
+function isSymlink(path) {
+  try {
+    return lstatSync(path).isSymbolicLink()
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -83,6 +115,19 @@ export function footerText(state) {
     default:
       return '⚠️ ci-local stopped'
   }
+}
+
+/**
+ * What the model receives with the end card: where it comes from, then the
+ * --status block. Without the first line a model takes the bare block for a
+ * message from the user. (The transcript draws the card from its details.)
+ */
+export function cardContent(block, project) {
+  return [
+    `The ci-local Pi extension: a run of ${project} you saw start has ended (this is not a message from the user).`,
+    '',
+    ...block.lines,
+  ].join('\n')
 }
 
 /**

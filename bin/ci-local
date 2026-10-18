@@ -457,9 +457,11 @@ Options:
   --quiet         Write each step's output to a log file instead of the
                   terminal; print only the step milestones, the end of a
                   failing step's log, and the summary. Or CI_LOCAL_QUIET=1.
-  --events FILE   Append one JSON line per milestone (run, step start, ok,
-                  fail, end) to FILE, emptied first: tail -f it from another
-                  terminal. Or CI_LOCAL_EVENTS=FILE. Without it a run writes
+  --events FILE   Append one JSON line per milestone (queued, run, step
+                  start, ok, fail, end) to FILE, emptied when the run takes
+                  it (a file a live run still writes waits for that run's
+                  end): tail -f it from another terminal.
+                  Or CI_LOCAL_EVENTS=FILE. Without it a run writes
                   them to ~/.cache/ci-local/<project>.ndjson (under
                   XDG_CACHE_HOME when set); CI_LOCAL_EVENTS=off writes none.
                   --list, --print-plan and --down ignore both.
@@ -481,7 +483,8 @@ Options:
   -h, --help      This text.
 
 Exit status: 0 when every step passed, 1 on the first failing step (named in
-the summary), 2 on a usage or configuration error, 3 busy with --no-wait.
+the summary), 2 on a usage or configuration error, 3 busy with --no-wait,
+130 or 143 when interrupted. Environment variables and files: see README.
 USAGE
 }
 
@@ -503,7 +506,8 @@ case "${CI_LOCAL_QUIET:-}" in '' | 0 | false) ;; *) QUIET=1 ;; esac
 QUEUE=1
 case "${CI_LOCAL_QUEUE:-}" in 0 | off | false | no) QUEUE=0 ;; esac
 QUEUE_POLL="${CI_LOCAL_QUEUE_POLL:-2}" # seconds between two looks at the queue
-[[ "$QUEUE_POLL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || QUEUE_POLL=2
+# A number above 0: with 0 the wait would be a busy loop.
+[[ "$QUEUE_POLL" =~ ^[0-9]+(\.[0-9]+)?$ && ! "$QUEUE_POLL" =~ ^0*(\.0*)?$ ]] || QUEUE_POLL=2
 EVENTS="${CI_LOCAL_EVENTS:-}"
 # Without --events a run writes to the default file (see DEFAULT_EVENTS);
 # CI_LOCAL_EVENTS=off writes none.
@@ -601,16 +605,45 @@ CI_CACHE_DIR="$CACHE_BASE/ci-local"
 # outside the checkout, in the user's own cache.
 DEFAULT_EVENTS="$CI_CACHE_DIR/$CI_PROJECT.ndjson"
 
+# True for a real directory (no symlink) of this user that no one else can
+# write.
+private_dir() {
+  local mode
+  [[ -d "$1" && ! -L "$1" && -O "$1" ]] || return 1
+  mode="$(ls -ld "$1" 2>/dev/null)" || return 1
+  [[ "${mode:5:1}" != w && "${mode:8:1}" != w ]]
+}
+# The TMPDIR fallback is a fixed name in a shared directory: one that is
+# there already and is not ours alone (planted, or a symlink to elsewhere) is
+# never used, for events or for the queue. One planted after this check is
+# caught by make_cache_dir, which in the fallback checks both directories
+# again once they exist, before anything is written in them.
+if [[ $CACHE_BASE_PRIVATE -eq 1 ]] && { [[ -L "$CACHE_BASE" ]] || { [[ -e "$CACHE_BASE" ]] && ! private_dir "$CACHE_BASE"; }; }; then
+  echo "ci-local: $CACHE_BASE is not a private directory of this user: no events file, no queue" >&2
+  [[ $STATUS -eq 0 ]] || exit 2
+  EVENTS_OFF=1
+  QUEUE=0
+fi
+
 # Makes ci-local's directory in the cache, readable by its user alone (the
 # directories above it, when they are the TMPDIR fallback's, too).
 make_cache_dir() {
-  [[ -d "$CI_CACHE_DIR" ]] && return 0
-  if [[ $CACHE_BASE_PRIVATE -eq 1 && ! -d "$CACHE_BASE" ]]; then
-    mkdir -p "$CACHE_BASE" && chmod 700 "$CACHE_BASE" || return 1
+  if [[ ! -d "$CI_CACHE_DIR" ]]; then
+    if [[ $CACHE_BASE_PRIVATE -eq 1 && ! -d "$CACHE_BASE" ]]; then
+      mkdir -p "$CACHE_BASE" && chmod 700 "$CACHE_BASE" || return 1
+    fi
+    mkdir -p "$CI_CACHE_DIR" && chmod 700 "$CI_CACHE_DIR" || return 1
   fi
-  mkdir -p "$CI_CACHE_DIR" && chmod 700 "$CI_CACHE_DIR"
+  # In the shared TMPDIR: whatever exists now must be ours alone.
+  [[ $CACHE_BASE_PRIVATE -eq 0 ]] || { private_dir "$CACHE_BASE" && private_dir "$CI_CACHE_DIR"; }
 }
-[[ $STATUS -eq 0 ]] || show_status "$DEFAULT_EVENTS"
+if [[ $STATUS -eq 1 ]]; then
+  # Off in the environment, runs write no events: the default file, if any,
+  # is an old run's, not the last one's.
+  [[ $EVENTS_OFF -eq 0 ]] ||
+    { echo "ci-local: CI_LOCAL_EVENTS is off: runs record no events, so --status has none to show" >&2; exit 2; }
+  show_status "$DEFAULT_EVENTS"
+fi
 [[ ${#CI_JOBS[@]} -gt 0 ]] || { echo "ci-local: CI_JOBS is empty" >&2; exit 2; }
 [[ "$(type -t ci_plan)" == function ]] || { echo "ci-local: the config defines no ci_plan function" >&2; exit 2; }
 CI_NETWORK="${CI_NETWORK:-$CI_PROJECT}"
@@ -993,7 +1026,7 @@ queue_wait() {
     QUEUE=0
   fi
   if [[ $QUEUE -eq 0 ]]; then
-    emit_queued
+    emit_position
     return 0
   fi
   event_time
@@ -1009,12 +1042,14 @@ queue_wait() {
     key="$AHEAD|$BLOCK_PROJECT|$BLOCK_PID"
     if [[ "$key" != "$last" ]]; then
       last=$key
-      emit_queued
+      # Refused before anything is recorded: the events file keeps the
+      # project's last run for --status.
+      if [[ $got -eq 0 && $NO_WAIT -eq 1 ]]; then
+        echo "ci-local: the machine is busy: $BLOCK_PROJECT (pid ${BLOCK_PID:-?})" >&2
+        exit 3
+      fi
+      emit_position
       if [[ $got -eq 0 ]]; then
-        if [[ $NO_WAIT -eq 1 ]]; then
-          echo "ci-local: the machine is busy: $BLOCK_PROJECT (pid ${BLOCK_PID:-?})" >&2
-          exit 3
-        fi
         echo "Waiting for $BLOCK_PROJECT (pid ${BLOCK_PID:-?}) · $AHEAD ahead"
         waited=1
       fi
@@ -1090,16 +1125,32 @@ finish() {
   exit "$status"
 }
 
+# The pid of another run, still going, whose events FILE holds (its first
+# event names it and no end event closed it); nothing otherwise.
+events_owner() {
+  local first pid
+  [[ -s "$1" ]] || return 0
+  ! grep -q '"event":"end"' "$1" 2>/dev/null || return 0
+  IFS= read -r first <"$1" 2>/dev/null || return 0
+  [[ "$first" =~ \"pid\":([0-9]+) ]] || return 0
+  pid=${BASH_REMATCH[1]}
+  if [[ "$pid" != "$$" ]] && pid_alive "$pid"; then echo "$pid"; fi
+  return 0
+}
+
+# Checked writable first, without emptying it: another run of this project
+# may still be writing it.
 if [[ -n "$EVENTS" ]]; then
-  : 2>/dev/null >"$EVENTS" || { echo "ci-local: cannot write the --events file $EVENTS" >&2; exit 2; }
+  : 2>/dev/null >>"$EVENTS" || { echo "ci-local: cannot write the --events file $EVENTS" >&2; exit 2; }
 elif [[ $EVENTS_OFF -eq 0 ]]; then
   # The default file is a convenience for --status: never a reason to stop.
-  if make_cache_dir 2>/dev/null && : 2>/dev/null >"$DEFAULT_EVENTS"; then
+  if make_cache_dir 2>/dev/null && : 2>/dev/null >>"$DEFAULT_EVENTS"; then
     EVENTS=$DEFAULT_EVENTS
   else
     echo "ci-local: cannot write the events file $DEFAULT_EVENTS: --status will not see this run" >&2
   fi
 fi
+# The step logs: made only once nothing above can stop the run.
 if [[ $QUIET -eq 1 ]]; then
   tmp="${TMPDIR:-/tmp}"
   LOG_DIR="$(mktemp -d "${tmp%/}/$CI_PROJECT-logs.XXXXXX")"
@@ -1112,9 +1163,81 @@ if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 RUN_LOG_DIR=null
 [[ -z "$LOG_DIR" ]] || RUN_LOG_DIR="$(json_string "$LOG_DIR")"
+
+# claim_events FILE: takes FILE for this run when no live run owns it:
+# empties it and writes the first queued event, all under FILE.claim (an
+# atomic mkdir), so two runs starting together cannot both take it. False
+# when a live run owns it (OWNER names it) or the claim cannot be had
+# (OWNER empty). A claim older than 10 seconds is a dead run's: broken; one
+# that cannot be removed is given up. Where no claim can be made at all (a
+# directory the user cannot write, with a writable file in it), the file is
+# taken without one, as before 0.4.0.
+claim_events() {
+  local claim="$1.claim" mtime tries=0 held=1
+  OWNER=""
+  until mkdir "$claim" 2>/dev/null; do
+    if [[ ! -e "$claim" ]]; then
+      # Released between the two looks, or it cannot be made at all.
+      mkdir "$claim" 2>/dev/null && break
+      if [[ ! -e "$claim" ]]; then
+        held=0
+        break
+      fi
+    fi
+    mtime="$(file_mtime "$claim")"
+    if [[ "$mtime" =~ ^[0-9]+$ && $(($(date +%s) - mtime)) -gt 10 ]]; then
+      mv "$claim" "$claim.stale.$$" 2>/dev/null || return 1
+      rm -rf "$claim.stale.$$"
+      continue
+    fi
+    tries=$((tries + 1))
+    [[ $tries -le 200 ]] || return 1
+    sleep 0.05
+  done
+  OWNER="$(events_owner "$1")"
+  if [[ -z "$OWNER" ]]; then
+    : >"$1"
+    EVENTS=$1
+    emit_queued
+  fi
+  # Only a claim this run made: without one, another run's may be there now.
+  [[ $held -eq 0 ]] || rmdir "$claim" 2>/dev/null
+  [[ -z "$OWNER" ]]
+}
+
+# The file is claimed with the first queued event (emit_position), once the
+# run knows its place. A file a live run still writes is left to it: this run
+# takes it over at its turn (the queue lets the other run end first), and
+# emits nothing before.
+EVENTS_CLAIM=$EVENTS
+EVENTS=""
+EVENTS_LATER=""
+
+# Where the run stands in the queue, in the events: the first time, by
+# claiming the events file with it.
+emit_position() {
+  [[ -n "$EVENTS_CLAIM" ]] || { emit_queued; return 0; }
+  local target=$EVENTS_CLAIM
+  EVENTS_CLAIM=""
+  claim_events "$target" && return 0
+  if [[ -n "$OWNER" ]]; then
+    EVENTS_LATER=$target
+  else
+    echo "ci-local: cannot claim the events file $target: this run writes no events" >&2
+  fi
+}
+
 # Queued from here: --status shows the run at once, and until its turn comes
 # nothing touches Docker.
 queue_wait
+if [[ -n "$EVENTS_LATER" ]] && ! claim_events "$EVENTS_LATER"; then
+  if [[ -n "$OWNER" ]]; then
+    # Only without the queue: both runs go on, and the file stays the other's.
+    echo "ci-local: the events file $EVENTS_LATER belongs to run $OWNER, still going: this run writes no events" >&2
+  else
+    echo "ci-local: cannot claim the events file $EVENTS_LATER: this run writes no events" >&2
+  fi
+fi
 STARTED=$SECONDS
 
 # The terminal, for finish (see there).

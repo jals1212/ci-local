@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
@@ -304,7 +304,7 @@ test('--status on a queued run whose process is gone: stopped before it started,
   const lines = out.trimEnd().split('\n')
   assert.equal(lines[0], '> ⚠️ **ci-local** · stopped')
   assert.equal(lines[1], '> `ci-local --quiet` · project `myapp-ci` · `abc123def456`')
-  assert.match(lines[2], /^> Never started: process \d+ is gone while queued \(interrupted, or the machine was busy with --no-wait\) · 1m0[56]s\.$/)
+  assert.match(lines[2], /^> Never started: process \d+ is gone while queued \(interrupted\) · 1m0[56]s\.$/)
 })
 
 test('--status with only the last run’s events: an earlier run in the file is not seen', () => {
@@ -323,4 +323,25 @@ test('--status refuses --no-wait, which starts a run', () => {
   const { status: code, err } = status(['--no-wait'], { cwd: project(["ci_step box One 'true'"]) })
   assert.equal(code, 2)
   assert.match(err, /ci-local: --status takes only --events/)
+})
+
+test('status.js can be imported from a process whose argv[1] is no file (it is then not the script)', () => {
+  const STATUS_JS = fileURLToPath(new URL('../status.js', import.meta.url))
+  const code = `import(${JSON.stringify(pathToFileURL(STATUS_JS).href)}).then((m) => console.log(typeof m.render))`
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', code, '/no/such/script'], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout, 'function\n')
+})
+
+test('--status with CI_LOCAL_EVENTS=off shows no old run: runs write none, so there is none to show', async () => {
+  const dir = project(["ci_step box One 'true'"])
+  const cache = mkdtempSync(join(tmpdir(), 'c-'))
+  await run([], { cwd: dir, cache }) // an old run, in the default file
+  const { status: code, out, err } = status([], { cwd: dir, cache, env: { CI_LOCAL_EVENTS: 'off' } })
+  assert.equal(code, 2)
+  assert.equal(out, '')
+  assert.match(err, /ci-local: CI_LOCAL_EVENTS is off: runs record no events, so --status has none to show\n/)
+  // An --events file named on the command line is still read.
+  const named = status(['--events', join(cache, 'ci-local', 'ci-local-selftest.ndjson')], { cwd: dir, cache, env: { CI_LOCAL_EVENTS: 'off' } })
+  assert.equal(named.status, 0, named.stderr)
 })

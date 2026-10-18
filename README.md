@@ -62,6 +62,23 @@ Or pinned to a commit, straight from GitHub:
 npm install --save-dev https://codeload.github.com/jals1212/ci-local/tar.gz/<commit>
 ```
 
+**Install it in each repository, not globally.** Each repository pins the
+version its config and its parity test were written for, `npx ci-local` (or
+`pnpm exec ci-local`) runs that one, and the parity test imports
+`@jals1212/ci-local/parity` from the repository's own `node_modules`. A global
+install would run one version for every repository.
+
+The [Pi package](#in-pi-footer-end-card-and-agent-skill) is the exception: it
+only reads the events each run writes, so it is installed once, for Pi, with
+`pi install npm:@jals1212/ci-local`.
+
+**Keep the repositories on one machine at 0.4.0 or later together.** The
+queue and the default events file came in 0.4.0: a run of an older version
+takes no turn in the queue (it may run alongside a newer one) and writes no
+events unless given `--events` (`--status` and Pi do not see it). Event
+fields are only ever added, so a newer `--status` or Pi package reads the
+events of an older 0.4.x run.
+
 ## Quick start
 
 Create `ci-local.config.sh` at the repository root:
@@ -156,6 +173,18 @@ set; with neither `XDG_CACHE_HOME` nor `HOME`, a private directory under
 `TMPDIR`), names it at the start, and goes on with a warning if it cannot write
 there. `CI_LOCAL_EVENTS=off` writes no events file.
 
+One events file holds one run. A run takes the file only when no live run
+of the project still writes it (its first event names a process that is
+alive, and no `end` event closed it): it then empties the file and writes its
+first event in one step, under a `<file>.claim` directory, so two runs that
+start together cannot both take it. A second run of a project waits in the
+queue without writing events and takes the file at its turn, when the first
+run is over; with `CI_LOCAL_QUEUE=off` it writes no events at all and says
+so. A `.claim` directory older than 10 seconds is a crashed run's and is
+removed; one that cannot be removed makes the run write no events, and say
+so. Where no claim can be made at all (a writable `--events` file in a
+directory you cannot write), the file is taken without one, as before 0.4.0.
+
 Put the file outside the checkout (inside, it is an uncommitted change in the
 summary) and in a directory only you can write: emptying a fixed name in a
 shared `/tmp` follows whatever another user left there under that name.
@@ -232,10 +261,22 @@ and after it ends. It needs no Docker and changes nothing.
 A run with no `end` event is `queued` while it waits for its turn, `starting`
 once it has it and has not yet begun its steps, `running` after that, as long
 as its process lives, and `stopped` once it is gone (also when it was
-interrupted while queued, or refused with `--no-wait`). Exit status: 0 passed,
+interrupted while queued). Exit status: 0 passed,
 1 failed, 2 no run recorded, 3 queued, starting or running, 4 stopped
 (interrupted, or gone without an end), so a script can wait with
 `while ci-local --status >/dev/null; [ $? -eq 3 ]; do sleep 10; done`.
+
+The time in the block (and in the Pi card) runs from the `run` event to the
+`end` event, so it includes the cleanup; the summary's `total` counts the
+steps alone, and neither counts the wait in the queue. A run of 13m47s of
+steps shows as about 13m50s here.
+
+"Its process lives" means a process with the run's pid exists. If the system
+gives a killed run's pid to another process before you look, `--status`
+shows the run as still going until that process ends too; the queue treats
+a ticket the same way. Pids are reused rarely enough for this to be a
+curiosity on a workstation, and the next run of the project replaces the
+file.
 
 ### One run at a time: the queue
 
@@ -259,7 +300,8 @@ The `total` of the summary counts from the turn, not from the wait.
 
 - **`--no-wait`**: when the machine is busy, print
   `ci-local: the machine is busy: <project> (pid <pid>)` on stderr and exit
-  with status **3**, without waiting.
+  with status **3**, without waiting. The refused run records nothing: the
+  project's events file, and so `--status`, still show its last run.
 - **Ctrl-C or `kill` while waiting** removes the run from the queue and exits
   130 or 143, with no summary and no cleanup: the runner of that project may
   be the one in use by the run ahead.
@@ -280,6 +322,13 @@ and a lock with no pid, which a crash between its two steps would leave, is
 stale after 10 seconds; a lock whose process is alive is never removed. The
 queue is polled every 2 seconds (`CI_LOCAL_QUEUE_POLL`, in seconds). If the
 directory cannot be made, the run says so and goes on without waiting.
+
+Without `XDG_CACHE_HOME` and `HOME` (a bare service account, say) the cache
+is `$TMPDIR/ci-local-<uid>`, a fixed name in a shared directory. ci-local
+makes it with mode 700, and refuses one that is already there and is not a
+real directory of yours that no one else can write (a symlink, another
+user's, or group- or world-writable): it says so, and that run neither
+queues nor writes events. `--status` refuses it too (status 2).
 
 ## In Pi: footer, end card and agent skill
 
@@ -307,6 +356,12 @@ runs ci-local or Docker itself:
 - **Skill `ci-local`**: how an agent runs and waits for ci-local (in the
   background, `--quiet`, never two runs, read only the failing step's log).
   Branch and merge policy stay the project's.
+
+The extension follows the file ci-local would write: `CI_LOCAL_EVENTS` from
+Pi's environment (a relative path is taken from the repository root, where
+runs are started as a rule), else the cache. When runs write no events
+(`CI_LOCAL_EVENTS=off`, or a `TMPDIR` fallback cache that is not a private
+directory of yours), the extension follows nothing.
 
 Outside Pi nothing changes: the extension, the skill and the optional Pi peer
 dependencies are not used by `npx ci-local`.
@@ -395,6 +450,34 @@ on your machine, with `set -e` in force. Options:
 | `--tag TAG`     | A tag `--skip` can name (for example `network`, to work offline).                |
 | `--deviates R`  | The step stands for the workflow step of the same name (or first command line) but runs another command on purpose, for reason R. The parity check accepts it in that position; R appears in `--print-plan` and, when the step ran, in a `DEVIATES` line of the summary. |
 
+### Environment variables
+
+| Variable | Meaning |
+| --- | --- |
+| `CI_LOCAL_CONFIG` | The config file name, instead of `ci-local.config.sh`. |
+| `CI_LOCAL_DOCKER_SOCK` | The Docker socket. Default: `/var/run/docker.sock`. |
+| `CI_LOCAL_QUIET` | `1` (anything but empty, `0` or `false`): as `--quiet`. |
+| `CI_LOCAL_EVENTS` | A file: as `--events FILE`. `off`, `0`, `false` or `no`: no events file at all. |
+| `CI_LOCAL_QUEUE` | `off`, `0`, `false` or `no`: no queue; runs may overlap. |
+| `CI_LOCAL_QUEUE_DIR` | The queue directory (absolute). Default: `<cache>/ci-local/queue`. |
+| `CI_LOCAL_QUEUE_POLL` | Seconds between two looks at the queue while waiting, above 0. Default: `2`. |
+| `XDG_CACHE_HOME`, `HOME`, `TMPDIR` | Where `<cache>` is: `$XDG_CACHE_HOME`, else `$HOME/.cache`, else `$TMPDIR/ci-local-<uid>`. |
+
+Set in the environment, `CI_LOCAL_QUIET` and `CI_LOCAL_EVENTS` are a standing
+preference: `--list`, `--print-plan` and `--down` ignore them without a
+warning.
+
+### Exit status
+
+| Status | A run | `--status` |
+| --- | --- | --- |
+| 0 | Every step passed, and the development stack is untouched. | The last run passed. |
+| 1 | A step failed, or the development stack changed. | It failed. |
+| 2 | A usage or configuration error; nothing ran. | No run recorded (or an unusable cache, or `CI_LOCAL_EVENTS=off`). |
+| 3 | `--no-wait`, and the machine is busy; nothing ran. | Queued, starting or running. |
+| 4 | | Stopped: interrupted, or its process is gone without an end. |
+| 130, 143 | Interrupted (Ctrl-C, `kill`). During the steps the summary still says `FAILED at step: interrupted`; while waiting in the queue nothing ran and nothing is printed. | |
+
 ## What it leaves on your machine
 
 After a run, nothing but caches: the runner images (`ci-local-base:*`, and
@@ -402,6 +485,13 @@ After a run, nothing but caches: the runner images (`ci-local-base:*`, and
 `$CI_PROJECT-npm-cache` and `$CI_PROJECT-cache` (`~/.cache`: Playwright browsers
 and the like). The runner, `node_modules` (a volume: never your host's) and
 everything labelled with `CI_LABEL` are removed, unless you passed `--keep`.
+
+In your cache (`~/.cache/ci-local/`, see [Environment variables](#environment-variables)),
+readable by you alone: one events file per project, `<project>.ndjson`,
+replaced by the next run of the project, and the `queue` directory, empty
+between runs. With `--quiet`, each run's step logs stay in
+`$TMPDIR/<project>-logs.XXXXXX` for you to read, until you or the system
+clean `TMPDIR`.
 
 The steps run on your checkout, so whatever they write there stays.
 

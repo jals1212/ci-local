@@ -25,10 +25,24 @@ export function lastRun(text) {
       // A line being written, or not ours: skip it.
     }
   }
-  let start = events.findLastIndex((event) => event.event === 'queued')
-  if (start === -1) start = events.findLastIndex((event) => event.event === 'run')
-  else while (start > 0 && events[start - 1].event === 'queued' && events[start - 1].pid === events[start].pid) start--
-  return start === -1 ? null : events.slice(start)
+  const lastQueued = events.findLastIndex((event) => event.event === 'queued')
+  if (lastQueued === -1) {
+    const lastRunEvent = events.findLastIndex((event) => event.event === 'run')
+    return lastRunEvent === -1 ? null : events.slice(lastRunEvent)
+  }
+  return events.slice(firstOfQueuedSeries(events, lastQueued))
+}
+
+/**
+ * The index of the first `queued` event of the unbroken series that ends at
+ * `index`: a waiting run repeats the event, with its own pid, each time its
+ * place changes.
+ */
+function firstOfQueuedSeries(events, index) {
+  const { pid } = events[index]
+  let first = index
+  while (first > 0 && events[first - 1].event === 'queued' && events[first - 1].pid === pid) first--
+  return first
 }
 
 /** True when a process with this pid exists (ours or not). */
@@ -49,9 +63,26 @@ export function duration(ms) {
 
 const quote = (arg) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`)
 
+/** What an `end` event's result shows as. */
+const FINISHED_AS = { passed: 'passed', interrupted: 'stopped' }
+
 /**
- * The state of a run from its events: one of running, passed, failed,
- * stopped, with what the block shows. `isAlive` is injectable for tests.
+ * queued, starting, running, passed, failed or stopped. A run with no end
+ * event is stopped once its process is gone; until its turn (no `run`
+ * event) it is queued while something is ahead of it, else starting.
+ */
+function stateOf({ end, run, lastQueued, isAlive }) {
+  if (end) return FINISHED_AS[end.result] ?? 'failed'
+  if (!isAlive(run.pid)) return 'stopped'
+  if (run.event === 'run') return 'running'
+  const waiting = (lastQueued?.ahead ?? 0) > 0 || Boolean(lastQueued?.blockedBy)
+  return waiting ? 'queued' : 'starting'
+}
+
+/**
+ * The state of a run from its events: one of queued, starting, running,
+ * passed, failed, stopped, with what the block shows. `isAlive` is
+ * injectable for tests.
  */
 export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
   const queuedEvents = events.filter((event) => event.event === 'queued')
@@ -67,13 +98,8 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
     if (event.event === 'ok') step = null
   }
   const fail = events.findLast((event) => event.event === 'fail') ?? null
-  let state
-  if (end) state = end.result === 'passed' ? 'passed' : end.result === 'interrupted' ? 'stopped' : 'failed'
-  else if (!isAlive(run.pid)) state = 'stopped'
-  else if (run.event === 'run') state = 'running'
-  else state = lastQueued.ahead > 0 || lastQueued.blockedBy ? 'queued' : 'starting'
   return {
-    state,
+    state: stateOf({ end, run, lastQueued, isAlive }),
     project: run.project,
     total: run.total,
     commit: run.commit,
@@ -150,7 +176,7 @@ export function render(state, eventsFile) {
   if (state.end) {
     why = `Interrupted${state.step ? ` during: ${stepRef(state.step)})` : ''} · ${time}${log(state.step)}`
   } else if (!state.hasRun) {
-    why = `Never started: process ${state.pid} is gone while queued (interrupted, or the machine was busy with --no-wait) · ${duration(state.waitingMs)}`
+    why = `Never started: process ${state.pid} is gone while queued (interrupted) · ${duration(state.waitingMs)}`
   } else {
     why = `No end: process ${state.pid} is gone (killed, or Docker froze)${
       state.step ? ` · during: ${stepRef(state.step)})` : ''
@@ -176,6 +202,13 @@ function main(file) {
   return code
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
-  process.exitCode = main(process.argv[2])
+/** True when this file is the script node runs (`node status.js FILE`), not an import. */
+function isMain() {
+  try {
+    return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+  } catch {
+    return false // argv[1] is no file (`node -e`, an embedder): this file was imported
+  }
 }
+
+if (isMain()) process.exitCode = main(process.argv[2])
