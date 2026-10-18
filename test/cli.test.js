@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FIXTURE = fileURLToPath(new URL('./fixture/', import.meta.url))
+const FAKE_DOCKER = join(FIXTURE, 'fake-docker')
+chmodSync(join(FAKE_DOCKER, 'docker'), 0o755)
 
 function ciLocal(args, { cwd = FIXTURE, env = {} } = {}) {
   // Cache and queue in fresh directories: never the real ones.
@@ -256,4 +258,25 @@ test('the run names the commit, uncommitted changes and visible ignored files', 
   assert.match(out, new RegExp(`\\n {2}checkout: commit ${sha}, 1 uncommitted change\\(s\\)\\n`))
   // .env is hidden from the steps and the root node_modules is a volume: neither is listed.
   assert.match(out, /\n {2}ignored files the steps can see: dist\/\n/)
+})
+
+test('a TMPDIR fallback that is not private is said only where it matters: --list, --print-plan and --down use no cache', () => {
+  // No XDG_CACHE_HOME and no HOME: the cache falls back to $TMPDIR/ci-local-<uid>,
+  // which here any user can write.
+  const tmp = mkdtempSync(join(tmpdir(), 'ci-local-tmpdir-'))
+  const fallback = join(tmp, `ci-local-${process.getuid()}`)
+  mkdirSync(fallback)
+  chmodSync(fallback, 0o777)
+  const env = { HOME: undefined, XDG_CACHE_HOME: undefined, TMPDIR: tmp, PATH: `${FAKE_DOCKER}:${process.env.PATH}` }
+
+  for (const args of [['--list'], ['--print-plan'], ['--down']]) {
+    const { status, err } = ciLocal(args, { env })
+    assert.equal(status, 0, args.join(' '))
+    assert.equal(err, '', `${args.join(' ')}: nothing on stderr`)
+  }
+
+  // --status reads the events file, so it still refuses.
+  const refused = ciLocal(['--status'], { env })
+  assert.equal(refused.status, 2)
+  assert.match(refused.err, /ci-local: .*ci-local-\d+ is not a private directory of this user: no events file, no queue\n/)
 })

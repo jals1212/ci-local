@@ -336,8 +336,9 @@ Without `XDG_CACHE_HOME` and `HOME` (a bare service account, say) the cache
 is `$TMPDIR/ci-local-<uid>`, a fixed name in a shared directory. ci-local
 makes it with mode 700, and refuses one that is already there and is not a
 real directory of yours that no one else can write (a symlink, another
-user's, or group- or world-writable): it says so, and that run neither
-queues nor writes events. `--status` refuses it too (status 2).
+user's, or group- or world-writable): a run says so, and neither queues nor
+writes events. `--status` refuses it too (status 2). `--list`, `--print-plan`
+and `--down` use no cache, so they say nothing.
 
 ## In Pi: status line, end card and agent skill
 

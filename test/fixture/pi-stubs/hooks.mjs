@@ -1,7 +1,10 @@
 // Module hooks for the wiring test: stand-ins for the Pi packages the
 // extension imports at run time, so it loads without Pi installed.
 const stubs = {
-  '@earendil-works/pi-tui': 'export class Box { addChild() {} }\nexport class Text {}\n',
+  // Box and Text keep what they are given, so a test can read a rendered card.
+  '@earendil-works/pi-tui':
+    'export class Box { constructor(...args) { this.args = args; this.children = [] } addChild(child) { this.children.push(child) } }\n' +
+    'export class Text { constructor(text) { this.text = text } }\n',
   typebox: 'export const Type = { Object: () => ({}) }\n',
 }
 
