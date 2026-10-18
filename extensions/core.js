@@ -118,6 +118,19 @@ export function footerText(state) {
 }
 
 /**
+ * What the model receives with the end card: where it comes from, then the
+ * --status block. Without the first line a model takes the bare block for a
+ * message from the user. (The transcript draws the card from its details.)
+ */
+export function cardContent(block, project) {
+  return [
+    `The ci-local Pi extension: a run of ${project} you saw start has ended (this is not a message from the user).`,
+    '',
+    ...block.lines,
+  ].join('\n')
+}
+
+/**
  * Remembers the runs seen in flight. observe() is true once, when a run seen
  * in flight is seen finished: a run already over when the session started,
  * or one never seen in flight, is not news.

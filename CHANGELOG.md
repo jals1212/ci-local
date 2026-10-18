@@ -59,6 +59,11 @@ their `release x.y.z:` commit messages.
   `ci-local --status` says so and exits 2 instead of showing one.
 - With `--quiet`, an `--events` file that cannot be written (status 2) no
   longer leaves an empty step-log directory in `TMPDIR`.
+- The Pi end card tells the model it comes from the ci-local extension;
+  without that line a model took the bare block for a message from the
+  user. The transcript shows the card as before.
+- README: why the time in `--status` and the card (to the end of the
+  cleanup) differs from the summary's `total` (the steps alone).
 - `status.js` can be imported by a process whose `argv[1]` is no file
   (`node -e`, an embedder) without throwing (#5).
 - A run refused by `--no-wait` records nothing, so `--status` keeps showing

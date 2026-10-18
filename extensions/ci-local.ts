@@ -16,7 +16,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { Box, Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 
-import { createTracker, eventsFileFor, findProject, footerText, readRun } from './core.js'
+import { cardContent, createTracker, eventsFileFor, findProject, footerText, readRun } from './core.js'
 
 const KEY = 'ci-local'
 const POLL_MS = 1000
@@ -94,7 +94,7 @@ export default function ciLocal(pi: ExtensionAPI) {
         `ci-local ${state} · ${found.project}`,
         state === 'passed' ? 'info' : state === 'failed' ? 'error' : 'warning'
       )
-      const card = { customType: KEY, content: run.block.lines.join('\n'), display: true, details: { state, lines: run.block.lines } }
+      const card = { customType: KEY, content: cardContent(run.block, found.project), display: true, details: { state, lines: run.block.lines } }
       // Idle: appended and shown now, in the context of the next turn, no turn
       // spent ('nextTurn' would hide it until then). Busy: a follow-up the
       // agent handles when its current work settles.

@@ -266,6 +266,11 @@ interrupted while queued). Exit status: 0 passed,
 (interrupted, or gone without an end), so a script can wait with
 `while ci-local --status >/dev/null; [ $? -eq 3 ]; do sleep 10; done`.
 
+The time in the block (and in the Pi card) runs from the `run` event to the
+`end` event, so it includes the cleanup; the summary's `total` counts the
+steps alone, and neither counts the wait in the queue. A run of 13m47s of
+steps shows as about 13m50s here.
+
 "Its process lives" means a process with the run's pid exists. If the system
 gives a killed run's pid to another process before you look, `--status`
 shows the run as still going until that process ends too; the queue treats

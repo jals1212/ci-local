@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { createTracker, eventsFileFor, findProject, footerText, readRun } from '../extensions/core.js'
+import { cardContent, createTracker, eventsFileFor, findProject, footerText, readRun } from '../extensions/core.js'
 
 function repo(config) {
   const dir = mkdtempSync(join(tmpdir(), 'pi-ext-'))
@@ -156,4 +156,12 @@ test('eventsFileFor: the TMPDIR fallback is null when it is there and not a priv
   const okTmp = mkdtempSync(join(tmpdir(), 'tmpdir-'))
   mkdirSync(fallback(okTmp), { mode: 0o700 })
   assert.equal(eventsFileFor('p-ci', { TMPDIR: okTmp }), join(fallback(okTmp), 'ci-local', 'p-ci.ndjson'))
+})
+
+test('cardContent tells the model where the card comes from, then gives the block', () => {
+  const block = { code: 0, lines: ['> ✅ **ci-local** · passed', '> `ci-local` · project `p-ci`', '> 2 steps · 5s · every step passed.'] }
+  const content = cardContent(block, 'p-ci')
+  const [first, ...rest] = content.split('\n')
+  assert.equal(first, 'The ci-local Pi extension: a run of p-ci you saw start has ended (this is not a message from the user).')
+  assert.deepEqual(rest, ['', ...block.lines])
 })
