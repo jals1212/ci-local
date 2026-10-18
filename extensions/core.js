@@ -110,12 +110,22 @@ export function parentPid(pid, { ps = 'ps' } = {}) {
  * Whether a run is this session's own. A run that names the Pi session that
  * started it (ci-local records PI_SESSION_ID, which Pi gives its bash tool)
  * belongs to that session alone, wherever its process went. One that names
- * none (a Gentle AI background job, a terminal) is decided by its process
- * tree (launchedBy).
+ * none (a Gentle AI background job, a terminal) is decided by the pids above
+ * it that it recorded at start (`ancestors`), else, for a run that recorded
+ * none, by its live process tree (launchedBy).
  */
-export function ownsRun(run, { sessionId, launched = (pid, pidStart) => launchedBy(pid, process.pid, { pidStart }) }) {
+export function ownsRun(
+  run,
+  { sessionId, sessionPid = process.pid, launched = (pid, pidStart) => launchedBy(pid, sessionPid, { pidStart }) }
+) {
   const named = run.state.session
-  return named ? named === sessionId : launched(run.state.pid, run.state.pidStart)
+  if (named) return named === sessionId
+  // The pids above the run when it started, while its session was still one:
+  // they outlast the run's own parents (nohup, setsid). A pid is not checked
+  // against its start time here, so a Pi process whose pid was given to another
+  // later could be matched by a stale event: a rare mistake that costs a card.
+  if (run.state.ancestors?.includes(sessionPid)) return true
+  return launched(run.state.pid, run.state.pidStart)
 }
 
 /**

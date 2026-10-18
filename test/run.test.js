@@ -235,6 +235,7 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   )
   const [queued, run, start, ok] = events
   assert.deepEqual(Object.keys(run).sort(), [
+    'ancestors',
     'args',
     'commit',
     'event',
@@ -250,6 +251,7 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   ])
   assert.deepEqual(Object.keys(queued).sort(), [
     'ahead',
+    'ancestors',
     'args',
     'blockedBy',
     'commit',
@@ -282,9 +284,10 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   assert.equal(typeof ok.durationMs, 'number')
   assert.ok(ok.durationMs >= 0)
   const end = events.at(-1)
-  assert.deepEqual(Object.keys(end).sort(), ['devStack', 'durationMs', 'event', 'result', 'ts'])
+  assert.deepEqual(Object.keys(end).sort(), ['devStack', 'deviations', 'durationMs', 'event', 'result', 'ts'])
   assert.equal(end.result, 'passed')
   assert.equal(end.devStack, 'none', 'no compose container of this checkout')
+  assert.equal(end.deviations, 0)
   for (const event of events) assert.match(event.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
   const times = events.map((event) => Date.parse(event.ts))
   assert.deepEqual(times, [...times].sort((x, y) => x - y))
@@ -414,4 +417,59 @@ test('a run started by a Pi session (PI_SESSION_ID) records it in its queued and
       ['run', 'session-123'],
     ]
   )
+})
+
+test('--events: a step that deviates carries its reason on start, ok and fail, and end counts them', async () => {
+  const dir = project([
+    "ci_step box Plain 'true'",
+    "ci_step box 'npm run e2e' --deviates 'leaves out a \"spec\"' 'true'",
+    "ci_step box 'Other' --deviates 'no network' 'exit 5'",
+  ])
+  const file = join(mkdtempSync(join(tmpdir(), 'ev-')), 'events.ndjson')
+  const { status } = await ciLocal(['--events', file], { cwd: dir })
+  assert.equal(status, 1)
+  const events = readEvents(file)
+  const of = (event, step) => events.find((e) => e.event === event && e.step === step)
+  const reason = 'leaves out a "spec"'
+  assert.equal(of('start', 'npm run e2e').deviates, reason)
+  assert.equal(of('ok', 'npm run e2e').deviates, reason)
+  assert.equal(of('start', 'Other').deviates, 'no network')
+  assert.equal(of('fail', 'Other').deviates, 'no network')
+  assert.equal('deviates' in of('start', 'Plain'), false, 'a plain step has no such field')
+  assert.equal('deviates' in of('ok', 'Plain'), false)
+  assert.equal(events.at(-1).deviations, 2, 'both steps that ran')
+})
+
+test('--events: a run records the pids above ci-local, nearest first, on queued and run', async () => {
+  const dir = project(["ci_step box One 'true'"])
+  const file = join(mkdtempSync(join(tmpdir(), 'ev-')), 'events.ndjson')
+  const { status, err } = await ciLocal(['--events', file], { cwd: dir })
+  assert.equal(status, 0, err)
+  const events = readEvents(file)
+  for (const event of events.filter((e) => e.event === 'queued' || e.event === 'run')) {
+    assert.ok(Array.isArray(event.ancestors), event.event)
+    assert.equal(event.ancestors[0], process.pid, 'its parent: this test, which spawned it')
+    assert.ok(!event.ancestors.includes(event.pid), 'ci-local itself is no ancestor')
+    assert.ok(!event.ancestors.includes(1), 'up to pid 1, excluded')
+    assert.ok(event.ancestors.every(Number.isInteger))
+  }
+})
+
+test('--events: the ancestors stop at 32, the nearest ones kept', () => {
+  const dir = project(["ci_step box One 'true'"])
+  const file = join(mkdtempSync(join(tmpdir(), 'ev-')), 'events.ndjson')
+  // A subshell per level, each with a command after it so bash cannot exec it away.
+  const script = `deep() { if [ "$1" -eq 0 ]; then bash "${BIN}" --events "${file}"; else ( deep $(($1 - 1)) ); fi; return $?; }; deep 40`
+  const env = {
+    ...process.env,
+    XDG_CACHE_HOME: mkdtempSync(join(tmpdir(), 'ci-local-cache-')),
+    CI_LOCAL_QUEUE_DIR: mkdtempSync(join(tmpdir(), 'ci-local-queue-')),
+    PATH: `${FAKE_DOCKER}:${process.env.PATH}`,
+  }
+  delete env.PI_SESSION_ID
+  const result = spawnSync('bash', ['-c', script], { cwd: dir, env, encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  const run = readEvents(file).find((e) => e.event === 'run')
+  assert.equal(run.ancestors.length, 32)
+  assert.equal(new Set(run.ancestors).size, 32, 'no pid twice')
 })

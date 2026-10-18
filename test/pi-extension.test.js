@@ -409,6 +409,33 @@ test('ownsRun: a run that names its Pi session belongs to that session alone; on
   assert.equal(ownsRun(unnamed, { sessionId: 'me', launched: tree(false) }), false, 'a terminal’s')
 })
 
+test('ownsRun: a run that names no session is the session’s when the pids it recorded at start include the session’s process', () => {
+  const run = (ancestors) => ({ state: { session: null, pid: 1, ancestors } })
+  const walk = (answer) => () => answer
+  const mine = { sessionId: 'me', sessionPid: 900 }
+  assert.equal(ownsRun(run([950, 900, 800]), { ...mine, launched: walk(false) }), true, 'orphaned since: the live walk finds nothing')
+  assert.equal(ownsRun(run([950, 700]), { ...mine, launched: walk(false) }), false, 'another session’s or a terminal’s: not among them')
+  assert.equal(ownsRun(run([950, 700]), { ...mine, launched: walk(true) }), true, 'not recorded, but the live walk finds the session')
+  assert.equal(ownsRun(run(undefined), { ...mine, launched: walk(true) }), true, 'an event from before 0.6.0: the live walk decides')
+  assert.equal(ownsRun(run(undefined), { ...mine, launched: walk(false) }), false)
+  assert.equal(ownsRun(run([]), { ...mine, launched: walk(false) }), false, 'ps could not say at start: the live walk decides')
+})
+
+test('ownsRun: the session a run names beats its recorded pids', () => {
+  const other = { state: { session: 'someone-else', pid: 1, ancestors: [900] } }
+  assert.equal(ownsRun(other, { sessionId: 'me', sessionPid: 900, launched: () => true }), false)
+})
+
+test('ownsRun checks this process’s pid by default', () => {
+  const run = { state: { session: null, pid: 1, ancestors: [process.pid] } }
+  assert.equal(ownsRun(run, { sessionId: 'me', launched: () => false }), true)
+})
+
+test('runState carries the pids a run recorded above it, or null', () => {
+  assert.deepEqual(readRun(eventsFile([run({ ancestors: [7, 5] })])).state.ancestors, [7, 5])
+  assert.equal(readRun(eventsFile([run()])).state.ancestors, null)
+})
+
 test('runState carries the session a run names, or null', () => {
   const named = readRun(eventsFile([run({ session: 'me' })]))
   assert.equal(named.state.session, 'me')

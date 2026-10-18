@@ -199,12 +199,12 @@ Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
-| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `pidStart`, `commit`, `args`, `logDir`, `session` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
-| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `pidStart` (its start time, as `ps -o lstart=` prints it in the C locale and UTC, for example `Sun Oct 18 14:58:57 2026`; `null` when `ps` cannot say), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`) |
-| `start` | a step starts | `step`, `index` (from 1), `total`; `log` when quiet |
-| `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` when quiet |
-| `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` when quiet |
-| `end` | after the cleanup | `result` (`passed`, `failed`, `interrupted`), `devStack` (`untouched`, `changed`, `none`), `durationMs` |
+| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `pidStart`, `commit`, `args`, `logDir`, `session`, `ancestors` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
+| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `pidStart` (its start time, as `ps -o lstart=` prints it in the C locale and UTC, for example `Sun Oct 18 14:58:57 2026`; `null` when `ps` cannot say), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`), `ancestors` (the pids above ci-local when it started, its parent first, up to but not with pid 1, at most 32; `[]` when `ps` cannot say. The Pi extension reads it to tell a run its session started from one that lost its parents since, by `nohup` or `setsid`) |
+| `start` | a step starts | `step`, `index` (from 1), `total`; `log` when quiet; `deviates` (the reason) when the step is marked `--deviates` |
+| `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` when quiet; `deviates` as in `start` |
+| `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` when quiet; `deviates` as in `start` |
+| `end` | after the cleanup | `result` (`passed`, `failed`, `interrupted`), `devStack` (`untouched`, `changed`, `none`), `deviations` (how many `--deviates` steps started), `durationMs` |
 
 ```sh
 # terminal 1
@@ -251,7 +251,7 @@ and after it ends. It needs no Docker and changes nothing.
 
 > 🚦 ✓ **ci-local** · passed
 > `ci-local` · project `myapp-ci` · `3f2a91c0b7de`
-> 12 steps · 9m03s · every step passed · Development stack untouched.
+> 12 steps · 9m03s · every step passed · 1 deviation (pnpm run test:integration) · Development stack untouched.
 
 > 🚦 ✗ **ci-local** · failed
 > `ci-local --quiet` · project `myapp-ci` · `3f2a91c0b7de`
@@ -274,6 +274,13 @@ interrupted while queued). Exit status: 0 passed,
 1 failed, 2 no run recorded, 3 queued, starting or running, 4 stopped
 (interrupted, or gone without an end), so a script can wait with
 `while ci-local --status >/dev/null; [ $? -eq 3 ]; do sleep 10; done`.
+
+A step marked `--deviates` runs another command than its workflow step, on
+purpose, so a passed run is weaker than GitHub's. The `passed` block says
+which: `1 deviation (pnpm run test:integration)`, or `3 deviations (a, b, …)`
+(the first two names). It reads the `deviates` field of the step events and
+the `deviations` count of `end`; events from before 0.6.0 have neither and
+show as before. The Pi card shows the same block.
 
 The time in the block (and in the Pi card) runs from the `run` event to the
 `end` event, so it includes the cleanup; the summary's `total` counts the
@@ -397,8 +404,13 @@ runs ci-local or Docker itself:
   reach the agent: runs this session started. A run started from Pi's bash
   tool names its session (ci-local records Pi's `PI_SESSION_ID` as `session`
   in its events), wherever its process goes; one that names none, as a
-  Gentle AI background job, is the session's when its process descends from
-  the session's. A run started by another session in the same repository,
+  Gentle AI background job, is the session's when the pids above it, which
+  it records at start (`ancestors`), include the session's process, so a run
+  orphaned since (`nohup`, `setsid`) is still found; a run that recorded none
+  (before 0.6.0) is the session's when its live process descends from the
+  session's. The recorded pids are not checked against start times: if Pi's
+  pid is given to another process later, an old run of the same events file
+  could be taken for the session's, and its card shown once too often. A run started by another session in the same repository,
   or in a terminal, shows in the status line alone, as Gentle AI's
   background-job notices go only to the session that started the job.
 - **When a run starts**: a card in the transcript when it is starting, or

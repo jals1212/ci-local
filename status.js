@@ -198,6 +198,10 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
     pidStart: run.pidStart ?? null,
     // The Pi session that started the run (PI_SESSION_ID), or null.
     session: run.session ?? null,
+    // The pids above the run when it started (nearest first), or null: tells a
+    // run its session started from one orphaned since.
+    ancestors: run.ancestors ?? null,
+    deviations: deviationsOf(events, end),
     step,
     fail,
     end: end ?? null,
@@ -209,6 +213,25 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
     blockedBy: lastQueued?.blockedBy ?? null,
     waitingMs: queued ? now - Date.parse(queued.ts) : 0,
   }
+}
+
+/**
+ * The steps that ran another command than their workflow step, on purpose:
+ * how many (the end event's count, else the names found) and their names.
+ * Events from before 0.6.0 carry neither: none.
+ */
+function deviationsOf(events, end) {
+  const steps = []
+  for (const event of events) {
+    if (typeof event.deviates === 'string' && !steps.includes(event.step)) steps.push(event.step)
+  }
+  return { count: end?.deviations ?? steps.length, steps }
+}
+
+/** `1 deviation (a)`, `3 deviations (a, b, …)`: at most two names. */
+function deviationNote({ count, steps }) {
+  const names = steps.length ? ` (${steps.slice(0, 2).join(', ')}${steps.length > 2 ? ', …' : ''})` : ''
+  return `${count} deviation${count === 1 ? '' : 's'}${names}`
 }
 
 const stepRef = (step) => `${step.step} (step ${step.index}/${step.total}`
@@ -244,7 +267,12 @@ export function render(state, eventsFile) {
   }
   if (state.state === 'passed') {
     const steps = `${state.total} step${state.total === 1 ? '' : 's'}`
-    const dev = state.devStack === 'untouched' ? ' · Development stack untouched' : ''
+    // A step that ran another command than GitHub's: a reader must not take
+    // this for full parity, so it is said before the rest.
+    const notes = []
+    if (state.deviations.count > 0) notes.push(deviationNote(state.deviations))
+    if (state.devStack === 'untouched') notes.push('Development stack untouched')
+    const dev = notes.map((note) => ` · ${note}`).join('')
     return {
       code: 0,
       lines: [`> ${BRAND} ${GLYPHS.passed} **ci-local** · passed`, `> ${where.join(' · ')}`, `> ${steps} · ${time} · every step passed${dev}.`],
