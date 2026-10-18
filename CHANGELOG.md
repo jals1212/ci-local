@@ -5,6 +5,20 @@ Each release of `@jals1212/ci-local`. Versions follow
 options and a patch version fixes. Releases before 0.3.0 are described in
 their `release x.y.z:` commit messages.
 
+## 0.5.0
+
+### Changed
+
+- A run is quiet by default when stdout is not a terminal (an agent, a
+  background job, a pipe): each step's output goes to its own log file, and
+  stdout gets the milestones, the summary and the end of a failing step's
+  log, as with `--quiet`. In a terminal, nothing changes: the output is live.
+  `CI_LOCAL_QUIET=0` and the new `--live` keep it live without a terminal
+  (`ci-local --live | tee run.log`); the last of `--live` and `--quiet` on
+  the command line wins. `--status` refuses both; `--list`, `--print-plan`
+  and `--down` ignore `--live` with a warning, as they do `--quiet`.
+- The `ci-local` skill no longer asks for `--quiet` (0.5.0 and later).
+
 ## 0.4.0
 
 ### Added

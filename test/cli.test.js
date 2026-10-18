@@ -89,7 +89,7 @@ test('--help documents every option, with or without a config', () => {
   for (const cwd of [FIXTURE, tmpdir()]) {
     const { status, out } = ciLocal(['--help'], { cwd })
     assert.equal(status, 0)
-    for (const option of ['--only', '--skip', '--keep', '--down', '--rebuild', '--list', '--print-plan', '--version', '--quiet', '--events', '--status']) {
+    for (const option of ['--only', '--skip', '--keep', '--down', '--rebuild', '--list', '--print-plan', '--version', '--quiet', '--live', '--events', '--status']) {
       assert.match(out, new RegExp(`\\n  ${option}\\b`), option)
     }
     for (const text of ['--no-wait', 'CI_LOCAL_QUEUE=off', 'CI_LOCAL_QUEUE_DIR', '3 busy with --no-wait']) assert.ok(out.includes(text), text)
@@ -177,7 +177,7 @@ test('a host step stops at its first failing command', { skip: !docker && 'no Do
       '',
     ].join('\n')
   )
-  const { status, out, err } = ciLocal([], { cwd: dir })
+  const { status, out, err } = ciLocal(['--live'], { cwd: dir })
   assert.equal(status, 1)
   assert.match(out, /before/)
   assert.doesNotMatch(out, /after-the-failure/)

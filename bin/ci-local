@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-CI_LOCAL_VERSION="0.4.0"
+CI_LOCAL_VERSION="0.5.0"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
@@ -457,6 +457,11 @@ Options:
   --quiet         Write each step's output to a log file instead of the
                   terminal; print only the step milestones, the end of a
                   failing step's log, and the summary. Or CI_LOCAL_QUIET=1.
+                  The default when stdout is not a terminal (an agent, a
+                  background job, a pipe).
+  --live          Print each step's output as it comes, the default in a
+                  terminal. Or CI_LOCAL_QUIET=0. The last of --quiet and
+                  --live wins.
   --events FILE   Append one JSON line per milestone (queued, run, step
                   start, ok, fail, end) to FILE, emptied when the run takes
                   it (a file a live run still writes waits for that run's
@@ -464,7 +469,7 @@ Options:
                   Or CI_LOCAL_EVENTS=FILE. Without it a run writes
                   them to ~/.cache/ci-local/<project>.ndjson (under
                   XDG_CACHE_HOME when set); CI_LOCAL_EVENTS=off writes none.
-                  --list, --print-plan and --down ignore both.
+                  --list, --print-plan and --down ignore them.
   --no-wait       Do not wait for another ci-local run to finish: when the
                   machine is busy, say which run holds it and exit with
                   status 3. Runs of every project on this machine take turns,
@@ -500,8 +505,11 @@ PRINT_PLAN=0
 HELP=0
 STATUS=0
 NO_WAIT=0
-QUIET=0
-case "${CI_LOCAL_QUIET:-}" in '' | 0 | false) ;; *) QUIET=1 ;; esac
+# Quiet by default when nobody watches: stdout is not a terminal (an agent, a
+# background job, a pipe). CI_LOCAL_QUIET overrides that default; --quiet and
+# --live, parsed below, override both (the last one given wins).
+if [[ -t 1 ]]; then QUIET=0; else QUIET=1; fi
+case "${CI_LOCAL_QUIET:-}" in '') ;; 0 | false) QUIET=0 ;; *) QUIET=1 ;; esac
 # The queue every real run takes its turn in; CI_LOCAL_QUEUE=off lets runs overlap.
 QUEUE=1
 case "${CI_LOCAL_QUEUE:-}" in 0 | off | false | no) QUEUE=0 ;; esac
@@ -515,7 +523,7 @@ EVENTS_OFF=0
 case "$EVENTS" in 0 | off | false | no) EVENTS=""; EVENTS_OFF=1 ;; esac
 # The command line as given, for the run event (and --status).
 ORIG_ARGS=("$@")
-# --quiet and --events given on this command line (not from the environment,
+# --quiet, --live and --events given on this command line (not from the environment,
 # a standing preference): an option that runs no step says it ignores them.
 RUN_OPTIONS_GIVEN=""
 
@@ -539,6 +547,7 @@ while [[ $# -gt 0 ]]; do
     --list) LIST_ONLY=1; shift ;;
     --print-plan) PRINT_PLAN=1; shift ;;
     --quiet) QUIET=1; RUN_OPTIONS_GIVEN+=" --quiet"; shift ;;
+    --live) QUIET=0; RUN_OPTIONS_GIVEN+=" --live"; shift ;;
     --events) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || die_usage "--events needs a file name"; EVENTS=$2; EVENTS_OFF=0; RUN_OPTIONS_GIVEN+=" --events"; shift 2 ;;
     --events=*) EVENTS=${1#--events=}; [[ -n "$EVENTS" ]] || die_usage "--events needs a file name"; EVENTS_OFF=0; RUN_OPTIONS_GIVEN+=" --events"; shift ;;
     --no-wait) NO_WAIT=1; shift ;;
@@ -559,7 +568,7 @@ show_status() {
 }
 
 if [[ $STATUS -eq 1 && $HELP -eq 0 ]]; then
-  [[ -z "$ONLY$SKIP" && $KEEP$DOWN_ONLY$REBUILD$LIST_ONLY$PRINT_PLAN$NO_WAIT == 000000 && "$RUN_OPTIONS_GIVEN" != *--quiet* ]] ||
+  [[ -z "$ONLY$SKIP" && $KEEP$DOWN_ONLY$REBUILD$LIST_ONLY$PRINT_PLAN$NO_WAIT == 000000 && "$RUN_OPTIONS_GIVEN" != *--quiet* && "$RUN_OPTIONS_GIVEN" != *--live* ]] ||
     die_usage "--status takes only --events"
   # An events file named on the command line or in the environment needs no
   # config: --status reads it from anywhere.

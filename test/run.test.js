@@ -1,11 +1,11 @@
 // Running a plan, without a Docker daemon: test/fixture/fake-docker/docker
 // stands in for the CLI and runs `docker exec` commands here. What is proven:
-// how a step's output reaches the terminal (live by default, in a log file
-// with --quiet), the --events file, and that the summary is the same in
-// every mode.
+// how a step's output reaches the terminal (live in a terminal or with
+// --live, in a log file without a terminal or with --quiet), the --events
+// file, and that the summary is the same in every mode.
 
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -95,9 +95,9 @@ const readEvents = (path) =>
     .filter(Boolean)
     .map((line) => JSON.parse(line))
 
-test('a step’s output reaches the terminal line by line, while the step runs', async () => {
+test('with --live, a step’s output reaches the terminal line by line, while the step runs', async () => {
   const dir = project(["ci_step box Slow 'echo first-line; sleep 1.5; echo second-line'"])
-  const { status, lines } = await ciLocal([], { cwd: dir })
+  const { status, lines } = await ciLocal(['--live'], { cwd: dir })
   assert.equal(status, 0)
   const first = arrival(lines, 'first-line')
   const second = arrival(lines, 'second-line')
@@ -106,19 +106,21 @@ test('a step’s output reaches the terminal line by line, while the step runs',
   assert.ok(arrival(lines, '==> [1/1] Slow') <= first, 'the start milestone comes first')
 })
 
-test('the summary and its last lines are the same with --quiet, --events or neither', async () => {
+test('the summary and its last lines are the same with --live, --quiet, --events or none', async () => {
   const plan = ["ci_step box One 'echo one'", "ci_step box Two --deviates 'on purpose' 'echo two'"]
-  const plain = await ciLocal([], { cwd: project(plan) })
+  const plain = await ciLocal(['--live'], { cwd: project(plan) })
+  const none = await ciLocal([], { cwd: project(plan) })
   const quiet = await ciLocal(['--quiet'], { cwd: project(plan) })
   const events = await ciLocal(['--events', join(mkdtempSync(join(tmpdir(), 'ev-')), 'e.ndjson')], {
     cwd: project(plan),
   })
-  for (const run of [plain, quiet, events]) assert.equal(run.status, 0, run.err)
+  for (const run of [plain, none, quiet, events]) assert.equal(run.status, 0, run.err)
   assert.match(plain.out, /\nPASSED: every step ran and passed\. This is not the GitHub check\.\n/)
   assert.match(plain.out, /ci-local summary: node 24\.21\.0, project ci-local-selftest, jobs: a b\n/)
   assert.match(plain.out, /\n {2}DEVIATES Two: on purpose\nPASSED/)
   assert.match(plain.out, /\nRemoving project ci-local-selftest \(runner, services, network, node_modules volume\)\n$/)
   assert.equal(summary(quiet.out), summary(plain.out))
+  assert.equal(summary(none.out), summary(plain.out))
   assert.equal(summary(events.out), summary(plain.out))
 })
 
@@ -132,6 +134,66 @@ test('--quiet writes each step’s output to its log and prints only the milesto
   assert.match(logs, /ci-local-selftest-logs\./)
   assert.deepEqual(readdirSync(logs).sort(), ['01-say-hello.log', '02-second.log'])
   assert.equal(readFileSync(join(logs, '01-say-hello.log'), 'utf8'), 'hello-from-step\nto-stderr\n')
+})
+
+/** Runs ci-local in a pseudo-terminal (python3's pty), as from a shell. */
+function inTerminal(args, { cwd }) {
+  const base = { ...process.env }
+  for (const name of ['CI_LOCAL_QUIET', 'CI_LOCAL_EVENTS', 'PI_SESSION_ID', 'CI_LOCAL_QUEUE', 'CI_LOCAL_QUEUE_POLL']) delete base[name]
+  return new Promise((resolve) => {
+    const child = spawn('python3', ['-c', 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)', 'bash', BIN, ...args], {
+      cwd,
+      env: {
+        ...base,
+        XDG_CACHE_HOME: mkdtempSync(join(tmpdir(), 'ci-local-cache-')),
+        CI_LOCAL_QUEUE_DIR: mkdtempSync(join(tmpdir(), 'ci-local-queue-')),
+        PATH: `${FAKE_DOCKER}:${process.env.PATH}`,
+      },
+    })
+    let out = ''
+    child.stdout.on('data', (chunk) => (out += chunk))
+    child.stderr.on('data', (chunk) => (out += chunk))
+    child.on('close', (status) => resolve({ status, out: out.replaceAll('\r\n', '\n') }))
+  })
+}
+
+test('without a terminal (an agent, a background job), a run is quiet by default', async () => {
+  const dir = project(["ci_step box 'Say hello' 'echo hello-from-step'"])
+  const { status, out, err } = await ciLocal([], { cwd: dir })
+  assert.equal(status, 0, err)
+  assert.doesNotMatch(out + err, /hello-from-step/)
+  const logs = out.match(/\nStep output: (.+)\n/)[1]
+  assert.equal(readFileSync(join(logs, '01-say-hello.log'), 'utf8'), 'hello-from-step\n')
+})
+
+const hasPython = spawnSync('python3', ['-c', 'import pty'], { stdio: 'ignore' }).status === 0
+
+test('in a terminal, a run is live by default; --quiet still sends the output to logs', { skip: !hasPython && 'no python3 for a pty' }, async () => {
+  const dir = project(["ci_step box 'Say hello' 'echo hello-from-step'"])
+  const live = await inTerminal([], { cwd: dir })
+  assert.equal(live.status, 0, live.out)
+  assert.match(live.out, /==> \[1\/1\] Say hello\nhello-from-step\n<== Say hello: ok/)
+  assert.doesNotMatch(live.out, /Step output:/)
+  const quiet = await inTerminal(['--quiet'], { cwd: dir })
+  assert.equal(quiet.status, 0, quiet.out)
+  assert.doesNotMatch(quiet.out, /hello-from-step/)
+  assert.match(quiet.out, /\nStep output: /)
+})
+
+test('CI_LOCAL_QUIET=0 and --live show the output; the last of --live and --quiet wins', async () => {
+  const dir = project(["ci_step box 'Say hello' 'echo hello-from-step'"])
+  const live = /==> \[1\/1\] Say hello\nhello-from-step\n/
+  for (const value of ['0', 'false']) {
+    const { status, out, err } = await ciLocal([], { cwd: dir, env: { CI_LOCAL_QUIET: value } })
+    assert.equal(status, 0, err)
+    assert.match(out, live, value)
+  }
+  const overridden = await ciLocal(['--live'], { cwd: dir, env: { CI_LOCAL_QUIET: '1' } })
+  assert.match(overridden.out, live)
+  const last = await ciLocal(['--live', '--quiet'], { cwd: dir })
+  assert.doesNotMatch(last.out, /hello-from-step/)
+  const lastLive = await ciLocal(['--quiet', '--live'], { cwd: dir })
+  assert.match(lastLive.out, live)
 })
 
 test('--quiet prints the end of a failing step’s log, then the usual summary', async () => {
@@ -156,7 +218,7 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   ])
   const file = join(mkdtempSync(join(tmpdir(), 'ev-')), 'events.ndjson')
   writeFileSync(file, '{"left":"from an earlier run"}\n')
-  const { status, err } = await ciLocal(['--only', 'a', '--skip', 'audit', '--keep', '--events', file], { cwd: dir })
+  const { status, err } = await ciLocal(['--live', '--only', 'a', '--skip', 'audit', '--keep', '--events', file], { cwd: dir })
   assert.equal(status, 0, err)
   const events = readEvents(file)
   assert.deepEqual(
@@ -205,9 +267,9 @@ test('--events writes one JSON object per milestone, in order, with --only and -
   assert.deepEqual([queued.ahead, queued.blockedBy], [0, null], 'nobody else is running')
   assert.deepEqual([queued.args, queued.commit, queued.logDir, queued.version], [run.args, run.commit, run.logDir, run.version])
   assert.equal(run.project, 'ci-local-selftest')
-  assert.deepEqual(run.args, ['--only', 'a', '--skip', 'audit', '--keep', '--events', file])
+  assert.deepEqual(run.args, ['--live', '--only', 'a', '--skip', 'audit', '--keep', '--events', file])
   assert.equal(run.commit, null, 'not a git checkout')
-  assert.equal(run.logDir, null, 'not --quiet')
+  assert.equal(run.logDir, null, '--live')
   assert.equal(typeof run.pid, 'number')
   assert.match(run.version, /^\d+\.\d+\.\d+$/)
   assert.deepEqual(run.jobs, ['a'])
@@ -298,14 +360,15 @@ test('an --events file that cannot be written is a status 2, before any step run
   }
 })
 
-test('--events and --quiet say so when the option runs no step, and write nothing', async () => {
+test('--events, --quiet and --live say so when the option runs no step, and write nothing', async () => {
   const dir = project(["ci_step box X 'true'"])
   const file = join(dir, 'events.ndjson')
   for (const mode of ['--list', '--print-plan', '--down']) {
-    const { status, out, err } = await ciLocal([mode, '--events', file, '--quiet'], { cwd: dir })
+    const { status, out, err } = await ciLocal([mode, '--events', file, '--quiet', '--live'], { cwd: dir })
     assert.equal(status, 0, mode)
     assert.match(err, new RegExp(`ci-local: --events is ignored with ${mode}: it runs no step\\n`), mode)
     assert.match(err, new RegExp(`ci-local: --quiet is ignored with ${mode}: it runs no step\\n`), mode)
+    assert.match(err, new RegExp(`ci-local: --live is ignored with ${mode}: it runs no step\\n`), mode)
     assert.equal(existsSync(file), false, mode)
     if (mode === '--print-plan') assert.equal(JSON.parse(out).project, 'ci-local-selftest')
   }
