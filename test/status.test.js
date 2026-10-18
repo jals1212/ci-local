@@ -123,7 +123,7 @@ test('--status after a passing run: the passed block, status 0', async () => {
   assert.equal(code, 0)
   const lines = out.trimEnd().split('\n')
   assert.equal(lines.length, 3, out)
-  assert.equal(lines[0], '> ✓ **ci-local** · passed')
+  assert.equal(lines[0], '> 🚦 ✓ **ci-local** · passed')
   assert.equal(lines[1], '> `ci-local --only a` · project `ci-local-selftest` · not a git checkout')
   assert.match(lines[2], /^> 2 steps · \d+s · every step passed\.$/)
 })
@@ -135,7 +135,7 @@ test('--status after a failing --quiet run: the failed step and its log, status 
   const { status: code, out } = status([], { cwd: dir, cache })
   assert.equal(code, 1)
   const lines = out.trimEnd().split('\n')
-  assert.equal(lines[0], '> ✗ **ci-local** · failed')
+  assert.equal(lines[0], '> 🚦 ✗ **ci-local** · failed')
   assert.equal(lines[1], '> `ci-local --quiet` · project `ci-local-selftest` · not a git checkout')
   assert.match(lines[2], /^> Failed at: Lint it \(step 2\/3, exit 3\) · \d+s · log: `.+\/02-lint-it\.log`\.$/)
 })
@@ -164,7 +164,7 @@ test('--status while a run is in flight: the running block with the step, status
   assert.equal(code, 3)
   const lines = out.split('\n')
   assert.equal(lines.length, 4, out)
-  assert.equal(lines[0], '> ⧗ **ci-local** · running · [2/8] pnpm run lint')
+  assert.equal(lines[0], '> 🚦 ⧗ **ci-local** · running · [2/8] pnpm run lint')
   assert.match(lines[1], /^> `ci-local --quiet` · project `myapp-ci` · `abc123def456` · 2m0[56]s so far$/)
   assert.equal(lines[2], `> Follow it: \`tail -f ${file}\` · step output: \`/tmp/myapp-ci-logs.X1\``)
   assert.equal(lines[3], '')
@@ -178,7 +178,7 @@ test('--status when the run’s process is gone without an end: stopped, status 
   const { status: code, out } = status(['--events', file])
   assert.equal(code, 4)
   const lines = out.trimEnd().split('\n')
-  assert.equal(lines[0], '> ⊘ **ci-local** · stopped')
+  assert.equal(lines[0], '> 🚦 ⊘ **ci-local** · stopped')
   assert.equal(lines[1], '> `ci-local` · project `myapp-ci` · `abc123def456`')
   assert.match(lines[2], /^> No end: process \d+ is gone \(killed, or Docker froze\) · during: pnpm test \(step 5\/8\)\.$/)
 })
@@ -201,7 +201,7 @@ test('--status after an interrupted run: stopped, status 4', () => {
   ])
   const { status: code, out } = status(['--events', file])
   assert.equal(code, 4)
-  assert.match(out, /^> ⊘ \*\*ci-local\*\* · stopped\n/)
+  assert.match(out, /^> 🚦 ⊘ \*\*ci-local\*\* · stopped\n/)
   assert.match(out, /\n> Interrupted during: pnpm test \(step 5\/8\) · 1m01s · log: `\/tmp\/myapp-ci-logs\.X1\/05-pnpm-test\.log`\.\n$/)
 })
 
@@ -242,7 +242,7 @@ test('--status with --events needs no config, nor Docker', () => {
     env: { PATH: `${join(dir, 'empty-path')}:${dirname(process.execPath)}:/usr/bin:/bin` },
   })
   assert.equal(code, 0)
-  assert.match(out, /^> ✓ \*\*ci-local\*\* · passed\n/)
+  assert.match(out, /^> 🚦 ✓ \*\*ci-local\*\* · passed\n/)
 })
 
 test('--status refuses the options that run steps', () => {
@@ -271,7 +271,7 @@ test('--status on a run waiting its turn: the queued block, status 3', () => {
   assert.equal(code, 3)
   const lines = out.split('\n')
   assert.equal(lines.length, 4, out)
-  assert.equal(lines[0], '> ◌ **ci-local** · queued · behind other-ci (2 ahead)')
+  assert.equal(lines[0], '> 🚦 ◌ **ci-local** · queued · behind other-ci (2 ahead)')
   assert.match(lines[1], /^> `ci-local --quiet` · project `myapp-ci` · `abc123def456` · waiting 1m0[56]s$/)
   assert.equal(lines[2], `> Follow it: \`tail -f ${file}\``)
   assert.equal(lines[3], '')
@@ -282,7 +282,7 @@ test('--status on a run that took its turn but has not started: starting, status
   const { status: code, out } = status(['--events', file])
   assert.equal(code, 3)
   const lines = out.trimEnd().split('\n')
-  assert.equal(lines[0], '> ⧗ **ci-local** · starting')
+  assert.equal(lines[0], '> 🚦 ⧗ **ci-local** · starting')
   assert.match(lines[1], /^> `ci-local` · project `myapp-ci` · not a git checkout · 1m0[56]s so far$/)
   assert.equal(lines[2], `> Follow it: \`tail -f ${file}\``)
 })
@@ -295,7 +295,7 @@ test('--status on a run that has taken its turn: running, counted from the run e
   ])
   const { status: code, out } = status(['--events', file])
   assert.equal(code, 3)
-  assert.match(out, /^> ⧗ \*\*ci-local\*\* · running · \[1\/8\] pnpm test\n> .* · 2m0[56]s so far\n/)
+  assert.match(out, /^> 🚦 ⧗ \*\*ci-local\*\* · running · \[1\/8\] pnpm test\n> .* · 2m0[56]s so far\n/)
 })
 
 test('--status on a queued run whose process is gone: stopped before it started, status 4', () => {
@@ -303,7 +303,7 @@ test('--status on a queued run whose process is gone: stopped before it started,
   const { status: code, out } = status(['--events', file])
   assert.equal(code, 4)
   const lines = out.trimEnd().split('\n')
-  assert.equal(lines[0], '> ⊘ **ci-local** · stopped')
+  assert.equal(lines[0], '> 🚦 ⊘ **ci-local** · stopped')
   assert.equal(lines[1], '> `ci-local --quiet` · project `myapp-ci` · `abc123def456`')
   assert.match(lines[2], /^> Never started: process \d+ is gone while queued \(interrupted\) · 1m0[56]s\.$/)
 })
@@ -317,7 +317,7 @@ test('--status with only the last run’s events: an earlier run in the file is 
   ])
   const { status: code, out } = status(['--events', file])
   assert.equal(code, 3)
-  assert.match(out, /^> ◌ \*\*ci-local\*\* · queued · behind other-ci \(1 ahead\)\n/)
+  assert.match(out, /^> 🚦 ◌ \*\*ci-local\*\* · queued · behind other-ci \(1 ahead\)\n/)
 })
 
 test('--status refuses --no-wait, which starts a run', () => {
@@ -345,4 +345,10 @@ test('--status with CI_LOCAL_EVENTS=off shows no old run: runs write none, so th
   // An --events file named on the command line is still read.
   const named = status(['--events', join(cache, 'ci-local', 'ci-local-selftest.ndjson')], { cwd: dir, cache, env: { CI_LOCAL_EVENTS: 'off' } })
   assert.equal(named.status, 0, named.stderr)
+})
+
+test('BRAND: one emoji names ci-local, before every state mark', async () => {
+  const { BRAND, GLYPHS } = await import('../status.js')
+  assert.equal(BRAND, '🚦')
+  for (const mark of Object.values(GLYPHS)) assert.equal([...mark].length, 1)
 })

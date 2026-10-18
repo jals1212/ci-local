@@ -83,6 +83,10 @@ their `release x.y.z:` commit messages.
   column wide, as Gentle Shell's own: `◌` queued, `⧗` starting or running,
   `✓` passed, `✗` failed, `⊘` stopped (emoji are two columns wide, and some
   terminals draw them badly).
+- ci-local's own emoji, 🚦, before the state mark in `--status`, the Pi
+  cards and the status line (`🚦 ⧗ ci-local [3/8] lint · 2m05s`), as Engram
+  has 🧠 and RDD 🌹 in Gentle Shell. One emoji per line, always first; the
+  state marks stay one column wide.
 - README: where the Pi status line shows (Pi's footer; Gentle Shell's
   sidebar, under Integrations).
 - `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.

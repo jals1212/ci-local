@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
-import { GLYPHS, alive, duration, lastRun, render, runState } from '../status.js'
+import { BRAND, GLYPHS, alive, duration, lastRun, render, runState } from '../status.js'
 
 const PROJECT_LINE = /^\s*CI_PROJECT=(?:"([a-z0-9][a-z0-9_-]*)"|'([a-z0-9][a-z0-9_-]*)'|([a-z0-9][a-z0-9_-]*))\s*(?:#.*)?$/
 
@@ -145,20 +145,21 @@ export function footerText(state) {
   switch (state.state) {
     case 'running':
       return state.step
-        ? `${GLYPHS.running} ci-local [${state.step.index}/${state.step.total}] ${state.step.step} · ${time}`
-        : `${GLYPHS.running} ci-local running · ${time}`
+        ? `${BRAND} ${GLYPHS.running} ci-local [${state.step.index}/${state.step.total}] ${state.step.step} · ${time}`
+        : `${BRAND} ${GLYPHS.running} ci-local running · ${time}`
     case 'starting':
-      return `${GLYPHS.starting} ci-local starting · ${time}`
+      return `${BRAND} ${GLYPHS.starting} ci-local starting · ${time}`
     case 'queued': {
       const behind = state.blockedBy?.project
-      return behind ? `${GLYPHS.queued} ci-local queued · behind ${behind}` : `${GLYPHS.queued} ci-local queued`
+      const queued = `${BRAND} ${GLYPHS.queued} ci-local queued`
+      return behind ? `${queued} · behind ${behind}` : queued
     }
     case 'passed':
-      return `${GLYPHS.passed} ci-local passed · ${time}`
+      return `${BRAND} ${GLYPHS.passed} ci-local passed · ${time}`
     case 'failed':
-      return state.fail ? `${GLYPHS.failed} ci-local failed at ${state.fail.step} · ${time}` : `${GLYPHS.failed} ci-local failed · ${time}`
+      return state.fail ? `${BRAND} ${GLYPHS.failed} ci-local failed at ${state.fail.step} · ${time}` : `${BRAND} ${GLYPHS.failed} ci-local failed · ${time}`
     default:
-      return `${GLYPHS.stopped} ci-local stopped`
+      return `${BRAND} ${GLYPHS.stopped} ci-local stopped`
   }
 }
 
