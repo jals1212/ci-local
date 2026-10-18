@@ -921,7 +921,11 @@ queue_poll() {
   local name
   BLOCK_PROJECT=""
   BLOCK_PID=""
-  queue_scan || { write_ticket && queue_scan || true; }
+  # Our ticket gone (removed by mistake, or never made): made again, looked for again.
+  if ! queue_scan; then
+    write_ticket
+    queue_scan || true
+  fi
   if [[ $AHEAD -gt 0 ]]; then
     name=${FIRST_TICKET##*/}
     BLOCK_PID=$((10#${name##*-}))
