@@ -5,6 +5,12 @@ Each release of `@jals1212/ci-local`. Versions follow
 options and a patch version fixes. Releases before 0.3.0 are described in
 their `release x.y.z:` commit messages.
 
+## Unreleased
+
+### Changed
+
+- README: the Pi package needs Pi 0.84.3 or later.
+
 ## 0.5.0
 
 ### Changed
