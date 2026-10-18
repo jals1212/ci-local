@@ -5,7 +5,7 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 
-import { duration, lastRun, render, runState } from '../status.js'
+import { alive, duration, lastRun, render, runState } from '../status.js'
 
 const PROJECT_LINE = /^\s*CI_PROJECT=(?:"([a-z0-9][a-z0-9_-]*)"|'([a-z0-9][a-z0-9_-]*)'|([a-z0-9][a-z0-9_-]*))\s*(?:#.*)?$/
 
@@ -145,6 +145,40 @@ export function createTracker() {
         return false
       }
       return inFlight.delete(run.key)
+    },
+  }
+}
+
+/**
+ * How the end card reaches the agent: an idle agent is woken to act on the
+ * result; a busy one gets it within its current work (steer), not once the
+ * whole task is over as a follow-up would.
+ */
+export function deliveryFor(idle) {
+  return idle ? { triggerTurn: true } : { deliverAs: 'steer' }
+}
+
+/** The longest an ended run's card waits for the run's process to exit. */
+export const CARD_GRACE_MS = 10_000
+
+/**
+ * Holds the card of an ended run until its process has exited (the cleanup
+ * after the end event, then the exit), CARD_GRACE_MS at most. A run started
+ * with a background job then reaches the agent with that job's own exit
+ * notice, in one turn, instead of each opening one.
+ */
+export function createCardQueue({ isAlive = alive, now = Date.now } = {}) {
+  let pending = null
+  return {
+    add(run) {
+      pending = { run, since: now() }
+    },
+    take() {
+      if (!pending) return null
+      if (isAlive(pending.run.state.pid) && now() - pending.since < CARD_GRACE_MS) return null
+      const { run } = pending
+      pending = null
+      return run
     },
   }
 }

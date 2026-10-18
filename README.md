@@ -346,11 +346,17 @@ runs ci-local or Docker itself:
 - **Footer**: `⏳ ci-local queued · behind erp-ci`, `🐳 ci-local [3/8] lint · 2m05s`,
   then `✅ ci-local passed · 4m12s` or `❌ ci-local failed at lint · 2m10s` until
   the next run.
-- **When a run the session saw in flight ends**: a notification, and a card in
-  the transcript with the `--status` block. The card reaches the agent: as a
-  follow-up when it is busy (it reacts to the result), or in the context of
-  your next message when it is idle (no turn is spent). A run already over
-  when the session starts is not announced.
+- **When a run the session saw in flight ends**: a notification at once, and
+  a card in the transcript with the `--status` block once the run's process
+  has exited (its cleanup, then its exit; 10 seconds at most). The card says
+  it comes from the extension, and reaches the agent:
+  - **busy**: within its current work (`steer`), not once the whole task is
+    over. A run started as a background job then reaches the agent in the
+    same turn as that job's own exit notice;
+  - **idle**: it wakes the agent, which acts on the result. That costs a
+    turn per run the session saw.
+
+  A run already over when the session starts is not announced.
 - **Tool `ci_local_status`**: the same three lines for the agent, without a
   shell.
 - **Skill `ci-local`**: how an agent runs and waits for ci-local (in the

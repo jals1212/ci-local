@@ -46,7 +46,7 @@ function firstOfQueuedSeries(events, index) {
 }
 
 /** True when a process with this pid exists (ours or not). */
-function alive(pid) {
+export function alive(pid) {
   if (!Number.isInteger(pid)) return false
   try {
     process.kill(pid, 0)
