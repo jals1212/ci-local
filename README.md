@@ -299,8 +299,8 @@ ci-local 0.4.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 
 The line is printed again only when whom the run waits for, or how many are
 ahead, changes. The run records the same in a `queued` event, so `--status`
-shows it (`🚦 ◌ ci-local · queued · behind other-ci`) from the first moment,
-and nothing touches Docker, the runner or the development stack until the turn comes.
+shows it (`🚦 ◌ **ci-local** · queued · behind other-ci (1 ahead)`) from the
+first moment, and nothing touches Docker, the runner or the development stack until the turn comes.
 The `total` of the summary counts from the turn, not from the wait.
 
 - **`--no-wait`**: when the machine is busy, print

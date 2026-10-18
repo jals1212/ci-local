@@ -151,7 +151,8 @@ export function footerText(state) {
       return `${BRAND} ${GLYPHS.starting} ci-local starting · ${time}`
     case 'queued': {
       const behind = state.blockedBy?.project
-      return behind ? `${BRAND} ${GLYPHS.queued} ci-local queued · behind ${behind}` : `${BRAND} ${GLYPHS.queued} ci-local queued`
+      const queued = `${BRAND} ${GLYPHS.queued} ci-local queued`
+      return behind ? `${queued} · behind ${behind}` : queued
     }
     case 'passed':
       return `${BRAND} ${GLYPHS.passed} ci-local passed · ${time}`
