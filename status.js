@@ -56,6 +56,12 @@ export function alive(pid) {
   }
 }
 
+/**
+ * The mark of each state, one column wide like Gentle Shell's own (✓, ⧗):
+ * emoji are two columns, and some terminals draw them badly.
+ */
+export const GLYPHS = { queued: '◌', starting: '⧗', running: '⧗', passed: '✓', failed: '✗', stopped: '⊘' }
+
 export function duration(ms) {
   const s = Math.max(0, Math.floor(ms / 1000))
   return s >= 60 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` : `${s}s`
@@ -138,7 +144,7 @@ export function render(state, eventsFile) {
     return {
       code: 3,
       lines: [
-        queued ? `> ⏳ **ci-local** · queued · ${behind}` : '> 🐳 **ci-local** · starting',
+        queued ? `> ${GLYPHS.queued} **ci-local** · queued · ${behind}` : `> ${GLYPHS.starting} **ci-local** · starting`,
         `> ${[...where, queued ? `waiting ${waiting}` : `${waiting} so far`].join(' · ')}`,
         `> Follow it: \`tail -f ${eventsFile}\``,
       ],
@@ -150,7 +156,7 @@ export function render(state, eventsFile) {
     if (state.logDir) follow.push(`step output: \`${state.logDir}\``)
     return {
       code: 3,
-      lines: [`> 🐳 **ci-local** · running${now}`, `> ${[...where, `${time} so far`].join(' · ')}`, `> ${follow.join(' · ')}`],
+      lines: [`> ${GLYPHS.running} **ci-local** · running${now}`, `> ${[...where, `${time} so far`].join(' · ')}`, `> ${follow.join(' · ')}`],
     }
   }
   if (state.state === 'passed') {
@@ -158,7 +164,7 @@ export function render(state, eventsFile) {
     const dev = state.devStack === 'untouched' ? ' · Development stack untouched' : ''
     return {
       code: 0,
-      lines: ['> ✅ **ci-local** · passed', `> ${where.join(' · ')}`, `> ${steps} · ${time} · every step passed${dev}.`],
+      lines: [`> ${GLYPHS.passed} **ci-local** · passed`, `> ${where.join(' · ')}`, `> ${steps} · ${time} · every step passed${dev}.`],
     }
   }
   if (state.state === 'failed') {
@@ -171,7 +177,7 @@ export function render(state, eventsFile) {
     } else {
       why = `Failed · ${time}`
     }
-    return { code: 1, lines: ['> ❌ **ci-local** · failed', `> ${where.join(' · ')}`, `> ${why}.`] }
+    return { code: 1, lines: [`> ${GLYPHS.failed} **ci-local** · failed`, `> ${where.join(' · ')}`, `> ${why}.`] }
   }
   // stopped
   let why
@@ -184,7 +190,7 @@ export function render(state, eventsFile) {
       state.step ? ` · during: ${stepRef(state.step)})` : ''
     }${log(state.step)}`
   }
-  return { code: 4, lines: ['> ⚠️ **ci-local** · stopped', `> ${where.join(' · ')}`, `> ${why}.`] }
+  return { code: 4, lines: [`> ${GLYPHS.stopped} **ci-local** · stopped`, `> ${where.join(' · ')}`, `> ${why}.`] }
 }
 
 function main(file) {

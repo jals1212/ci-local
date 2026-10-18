@@ -36,7 +36,7 @@ their `release x.y.z:` commit messages.
 - A `queued` event, written as soon as the run starts and again when whom it
   waits for changes (`project`, `version`, `pid`, `commit`, `args`, `logDir`,
   `ahead`, `blockedBy`), so `--status` never has a gap before the `run` event.
-  `--status` shows `queued` (⏳) and `starting` (🐳), both with exit status 3.
+  `--status` shows `queued` (◌) and `starting` (⧗), both with exit status 3.
 - An events file still written by a live run of the same project is left to
   it: a second run takes it over only at its turn (without the queue, it
   writes no events and says so). Taking it (checking that no live run owns
@@ -79,6 +79,10 @@ their `release x.y.z:` commit messages.
 - Pi start cards: when a run is starting (or waiting for its turn) and when
   its steps start, a card in the transcript for the user only (session
   entries, never in the model's context, not repeated after a reload).
+- The state marks of `--status`, the Pi cards and the status line are one
+  column wide, as Gentle Shell's own: `◌` queued, `⧗` starting or running,
+  `✓` passed, `✗` failed, `⊘` stopped (emoji are two columns wide, and some
+  terminals draw them badly).
 - README: where the Pi status line shows (Pi's footer; Gentle Shell's
   sidebar, under Integrations).
 - `CI_LOCAL_QUEUE_POLL` of 0 falls back to 2 seconds instead of a busy loop.
