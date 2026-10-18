@@ -39,7 +39,7 @@ Use when running, waiting on, reading, or configuring `ci-local` (`npx ci-local`
 1. Check the plan: `ci-local --list`.
 2. Start: `ci-local` in the background (`ci-local --quiet` before 0.5.0).
 3. While waiting, keep working on something that does not touch the checkout, or report the `--status` block.
-4. On exit: status 0 passed, 1 failed, 2 usage/config error, 3 busy with `--no-wait`.
+4. On exit: status 0 passed, 1 failed, 2 usage/config error, 3 no turn (busy with `--no-wait`, or `CI_LOCAL_QUEUE_TIMEOUT` reached).
 5. Failed: open the failing step's log, fix, and run again; partial `--only` runs are fine while fixing, the final check is a full run.
 
 ## Output Contract

@@ -199,8 +199,8 @@ Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
-| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `commit`, `args`, `logDir`, `session` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
-| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`) |
+| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `pidStart`, `commit`, `args`, `logDir`, `session` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
+| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `pidStart` (its start time, as `ps -o lstart=` prints it in the C locale and UTC, for example `Sun Oct 18 14:58:57 2026`; `null` when `ps` cannot say), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`) |
 | `start` | a step starts | `step`, `index` (from 1), `total`; `log` when quiet |
 | `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` when quiet |
 | `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` when quiet |
@@ -280,12 +280,18 @@ The time in the block (and in the Pi card) runs from the `run` event to the
 steps alone, and neither counts the wait in the queue. A run of 13m47s of
 steps shows as about 13m50s here.
 
-"Its process lives" means a process with the run's pid exists. If the system
-gives a killed run's pid to another process before you look, `--status`
-shows the run as still going until that process ends too; the queue treats
-a ticket the same way. Pids are reused rarely enough for this to be a
-curiosity on a workstation, and the next run of the project replaces the
-file.
+"Its process lives" means a process with the run's pid exists and started when
+the run did: a run records its start time (`pidStart`) next to its pid, so a
+killed run whose pid the system gave to another process shows as `stopped`,
+not as still going. The queue's tickets and lock, and the claim of the events
+file by the next run, tell the same way. Start times are read with
+`ps -o lstart=`, which macOS and Linux both have, in the C locale and UTC so
+that every process reads the same text; it has a resolution of one second, and
+two start times at most 3 seconds apart are the same one (the clock may be
+stepped between two readings). A pid of 0 or 1 is never a run.
+Events from before 0.6.0 have no `pidStart`: for those the pid alone decides,
+and a reused pid still looks alive. If `ps` cannot say a process's start now,
+the pid alone decides too.
 
 ### One run at a time: the queue
 
@@ -302,7 +308,13 @@ ci-local 0.5.3: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 ```
 
 The line is printed again only when whom the run waits for, or how many are
-ahead, changes. The run records the same in a `queued` event, so `--status`
+ahead, changes. A run that keeps waiting says so every 5 minutes, so a hang
+shows:
+
+```text
+Still waiting for other-ci (pid 48213) · 1 ahead · 10m00s
+```
+ The run records the same in a `queued` event, so `--status`
 shows it (`🚦 ◌ **ci-local** · queued · behind other-ci (1 ahead)`) from the
 first moment, and nothing touches Docker, the runner or the development stack until the turn comes.
 The `total` of the summary counts from the turn, not from the wait.
@@ -311,6 +323,16 @@ The `total` of the summary counts from the turn, not from the wait.
   `ci-local: the machine is busy: <project> (pid <pid>)` on stderr and exit
   with status **3**, without waiting. The refused run records nothing: the
   project's events file, and so `--status`, still show its last run.
+- **`CI_LOCAL_QUEUE_TIMEOUT=<seconds>`**: a run that has waited that long for
+  its turn gives up. It removes its ticket, prints
+  `ci-local: gave up waiting after 30m00s for <project> (pid <pid>)` on
+  stderr and exits with status **3**, the status of `--no-wait`: in both the
+  run got no turn and nothing ran, which is not a failure of its steps.
+  The default, `0`, is no limit. The run ahead is left alone. The events file
+  keeps the `queued` event, so `--status` shows the run as `stopped`, never
+  started, like one interrupted while queued.
+- **`CI_LOCAL_QUEUE_NOTICE=<seconds>`** sets how often the `Still waiting`
+  line is printed (default `300`; `0`: never).
 - **Ctrl-C or `kill` while waiting** removes the run from the queue and exits
   130 or 143, with no summary and no cleanup: the runner of that project may
   be the one in use by the run ahead.
@@ -323,8 +345,10 @@ How it works, for the curious or for a stuck queue: the directory
 `CI_LOCAL_QUEUE_DIR` (default `~/.cache/ci-local/queue`, readable by you
 alone; the `XDG_CACHE_HOME` and `TMPDIR` fallbacks are those of the events
 file, and a path you set must be absolute) holds one ticket file per run,
-named by the time it came and its pid, and a `lock` directory made by the run
-whose turn it is (`lock/pid` names it). A run goes ahead when its ticket is
+named by the time it came and its pid (the ticket also holds its `pidStart`), and a `lock` directory made by the run
+whose turn it is (`lock/pid` names it: its pid on the first line, its start
+time on the second; versions before 0.6.0 read the first line alone, and
+read a lock without the second as before). A run goes ahead when its ticket is
 the first one of a live process and it makes the lock. Tickets and locks of
 processes that are gone (killed, a crash, a reboot) are ignored and removed,
 and a lock with no pid, which a crash between its two steps would leave, is
@@ -511,6 +535,8 @@ on your machine, with `set -e` in force. Options:
 | `CI_LOCAL_QUEUE` | `off`, `0`, `false` or `no`: no queue; runs may overlap. |
 | `CI_LOCAL_QUEUE_DIR` | The queue directory (absolute). Default: `<cache>/ci-local/queue`. |
 | `CI_LOCAL_QUEUE_POLL` | Seconds between two looks at the queue while waiting, above 0. Default: `2`. |
+| `CI_LOCAL_QUEUE_TIMEOUT` | Whole seconds a run waits for its turn before it gives up and exits 3. `0`: no limit. Default: `0`. Not a whole number: status 2. |
+| `CI_LOCAL_QUEUE_NOTICE` | Whole seconds between two `Still waiting for …` lines while waiting. `0`: none. Default: `300`. Not a whole number: status 2. |
 | `XDG_CACHE_HOME`, `HOME`, `TMPDIR` | Where `<cache>` is: `$XDG_CACHE_HOME`, else `$HOME/.cache`, else `$TMPDIR/ci-local-<uid>`. |
 
 Set in the environment, `CI_LOCAL_QUIET` and `CI_LOCAL_EVENTS` are a standing
@@ -524,7 +550,7 @@ warning.
 | 0 | Every step passed, and the development stack is untouched. | The last run passed. |
 | 1 | A step failed, or the development stack changed. | It failed. |
 | 2 | A usage or configuration error; nothing ran. | No run recorded (or an unusable cache, or `CI_LOCAL_EVENTS=off`). |
-| 3 | `--no-wait`, and the machine is busy; nothing ran. | Queued, starting or running. |
+| 3 | `--no-wait` and the machine is busy, or `CI_LOCAL_QUEUE_TIMEOUT` ran out while waiting; nothing ran. | Queued, starting or running. |
 | 4 | | Stopped: interrupted, or its process is gone without an end. |
 | 130, 143 | Interrupted (Ctrl-C, `kill`). During the steps the summary still says `FAILED at step: interrupted`; while waiting in the queue nothing ran and nothing is printed. | |
 

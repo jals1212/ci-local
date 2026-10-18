@@ -7,6 +7,37 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Added
+
+- Queue: `CI_LOCAL_QUEUE_TIMEOUT` (whole seconds, default `0`: no limit). A
+  run that has waited that long for its turn removes its ticket, prints
+  `ci-local: gave up waiting after <time> for <project> (pid N)` on stderr
+  and exits with status 3, the status of `--no-wait`: the run got no turn
+  and nothing ran. (#2)
+- Queue: a waiting run prints `Still waiting for <project> (pid N) · <n>
+  ahead · <time>` every `CI_LOCAL_QUEUE_NOTICE` seconds (default 300; `0`:
+  never), so a hang behind it shows. The `Waiting for` line on a change is
+  kept. (#2)
+- A wrong `CI_LOCAL_QUEUE_TIMEOUT` or `CI_LOCAL_QUEUE_NOTICE` (not a whole
+  number of seconds) is a usage error, status 2, before anything is queued.
+
+### Fixed
+
+- A reused pid no longer makes a dead run look alive. The `queued` and `run`
+  events, the queue tickets and `lock/pid` record the process's start time
+  (`pidStart`, from `ps -o lstart=` in the C locale and UTC) next to its pid,
+  and a pid that started at another time counts as gone: `--status` and the
+  Pi status line show the run as stopped, the next run takes over its events
+  file, and its ticket and lock are ignored. Two start times count as the
+  same when they are at most 3 seconds apart, so a clock stepped by NTP does
+  not make a live run look gone; a start time that cannot be read as a date
+  cannot tell, so the pid alone decides. Pids 0 and 1 are never a run (`kill -0 0`
+  reaches the whole process group): they count as gone. `--status` and the Pi
+  status line keep a start time read from `ps` for 5 seconds instead of
+  asking every second. Events and tickets without a start time (older runs)
+  keep the pid-only check. `lock/pid` has the pid on its first line, as
+  before, and the start time on its second. (#3)
+
 ## 0.5.3
 
 ### Fixed
