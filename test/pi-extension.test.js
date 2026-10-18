@@ -400,7 +400,7 @@ test('runState carries the session a run names, or null', () => {
 test('staleAtStart: a run already over when a session starts is hidden once its result was delivered; a reload shows it only if this session showed it', () => {
   const over = readRun(eventsFile([run(), { ts: ago(1000), event: 'end', result: 'passed', durationMs: 1000 }]))
   const live = readRun(eventsFile([run()]))
-  const by = (session, key = over.key) => ({ key, session })
+  const by = (session, key = over.key) => ({ key, sessions: session ? [session] : [] })
   const at = (reason, delivered) => ({ reason, sessionId: 'me', delivered })
   assert.equal(staleAtStart(null, at('startup', null)), null, 'no run: nothing to hide')
   assert.equal(staleAtStart(live, at('startup', by('other', live.key))), null, 'in flight: shown')
@@ -411,17 +411,21 @@ test('staleAtStart: a run already over when a session starts is hidden once its 
   assert.equal(staleAtStart(over, at('reload', by('me'))), null, 'a reload keeps it when this session showed it')
   assert.equal(staleAtStart(over, at('reload', by('other'))), over.key, 'a reload keeps it hidden when this session hid it')
   assert.equal(staleAtStart(over, at('reload', by(null))), null, 'a marker that names no session: a reload shows it')
+  assert.equal(staleAtStart(over, at('reload', { key: over.key, sessions: ['other', 'me'] })), null, 'two sessions showed it: a reload of either shows it')
 })
 
-test('delivered marker: none at first, then the last run whose result was shown and the session that showed it', () => {
+test('delivered marker: none at first, then the last run whose result was shown and every session that showed it', () => {
   const file = join(mkdtempSync(join(tmpdir(), 'dv-')), 'myapp-ci.ndjson')
   assert.equal(readDelivered(file), null)
   markDelivered(file, '2025-01-01T00:00:00Z|42', 'me')
-  assert.deepEqual(readDelivered(file), { key: '2025-01-01T00:00:00Z|42', session: 'me' })
+  assert.deepEqual(readDelivered(file), { key: '2025-01-01T00:00:00Z|42', sessions: ['me'] })
+  markDelivered(file, '2025-01-01T00:00:00Z|42', 'other')
+  markDelivered(file, '2025-01-01T00:00:00Z|42', 'me')
+  assert.deepEqual(readDelivered(file), { key: '2025-01-01T00:00:00Z|42', sessions: ['me', 'other'] }, 'the same run: sessions add up, once each')
   markDelivered(file, '2025-01-02T00:00:00Z|43', 'other')
-  assert.deepEqual(readDelivered(file), { key: '2025-01-02T00:00:00Z|43', session: 'other' })
+  assert.deepEqual(readDelivered(file), { key: '2025-01-02T00:00:00Z|43', sessions: ['other'] }, 'a new run starts over')
   writeFileSync(`${file}.delivered`, '2025-01-03T00:00:00Z|44\n') // a 0.5.1 marker: the key alone
-  assert.deepEqual(readDelivered(file), { key: '2025-01-03T00:00:00Z|44', session: null })
+  assert.deepEqual(readDelivered(file), { key: '2025-01-03T00:00:00Z|44', sessions: [] })
   assert.equal(readDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson')), null)
   markDelivered(join(tmpdir(), 'no-such-dir-ci-local', 'x.ndjson'), 'k', 'me') // no directory: ignored, never thrown
 })

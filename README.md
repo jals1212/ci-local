@@ -363,7 +363,7 @@ runs ci-local or Docker itself:
   the repository open. Once a session has shown it finished, a later session
   (new or resumed) leaves it out, and a reload keeps it out unless that
   session is the one that showed it; the marker, `<events file>.delivered`,
-  holds the run and the session. A run in flight, and every later one, shows. Pi shows it in the footer. A shell that draws its own chrome
+  holds the run and the sessions that showed it. A run in flight, and every later one, shows. Pi shows it in the footer. A shell that draws its own chrome
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).

@@ -150,7 +150,7 @@ export function launchedBy(pid, ancestor, { parentOf = parentPid, isAlive = aliv
  */
 export function staleAtStart(run, { reason, sessionId, delivered } = {}) {
   if (!run || !FINISHED.has(run.state.state) || delivered?.key !== run.key) return null
-  if (reason === 'reload' && (!delivered.session || delivered.session === sessionId)) return null
+  if (reason === 'reload' && (!delivered.sessions.length || delivered.sessions.includes(sessionId))) return null
   return run.key
 }
 
@@ -158,8 +158,8 @@ export function staleAtStart(run, { reason, sessionId, delivered } = {}) {
 const deliveredFile = (file) => `${file}.delivered`
 
 /**
- * The last run whose result was delivered (shown finished) and the session
- * that showed it, or null. A marker with the key alone (0.5.1) names no session.
+ * The last run whose result was delivered (shown finished) and every session
+ * that showed it, or null. A marker with the key alone (0.5.1) names none.
  */
 export function readDelivered(file) {
   let text
@@ -168,20 +168,24 @@ export function readDelivered(file) {
   } catch {
     return null
   }
-  const [key, session] = text.trim().split('\t')
-  return key ? { key, session: session || null } : null
+  const [key, ...sessions] = text.trim().split('\t')
+  return key ? { key, sessions: sessions.filter(Boolean) } : null
 }
 
 /**
- * Records that the result of run `key` was delivered, by `session`. Written
- * whole (a temporary file, then a rename); a failure is ignored: the result
- * is then shown once more, never lost.
+ * Records that the result of run `key` was delivered, by `session`: added to
+ * the sessions that showed the same run, or starting over for a new run.
+ * Written whole (a temporary file, then a rename); a failure is ignored: the
+ * result is then shown once more, never lost.
  */
 export function markDelivered(file, key, session) {
   const target = deliveredFile(file)
   const temporary = `${target}.${process.pid}.tmp`
+  const before = readDelivered(file)
+  const sessions = before?.key === key ? before.sessions : []
+  if (session && !sessions.includes(session)) sessions.push(session)
   try {
-    writeFileSync(temporary, `${key}\t${session ?? ''}\n`, { mode: 0o600 })
+    writeFileSync(temporary, `${[key, ...sessions].join('\t')}\n`, { mode: 0o600 })
     renameSync(temporary, target)
   } catch {
     try {
