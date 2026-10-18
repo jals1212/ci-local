@@ -199,12 +199,28 @@ Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
-| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `project`, `version`, `pid`, `pidStart`, `commit`, `args`, `logDir`, `session`, `ancestors` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
-| `run` | the run has its turn and the steps are about to run | `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `pidStart` (its start time, as `ps -o lstart=` prints it in the C locale and UTC, for example `Sun Oct 18 14:58:57 2026`; `null` when `ps` cannot say), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`), `ancestors` (the pids above ci-local when it started, its parent first, up to but not with pid 1, at most 32; `[]` when `ps` cannot say. The Pi extension reads it to tell a run its session started from one that lost its parents since, by `nohup` or `setsid`) |
+| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `schema`, `project`, `version`, `pid`, `pidStart`, `commit`, `args`, `logDir`, `session`, `ancestors` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
+| `run` | the run has its turn and the steps are about to run | `schema` (the events contract version, `1`; see below), `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `pidStart` (its start time, as `ps -o lstart=` prints it in the C locale and UTC, for example `Sun Oct 18 14:58:57 2026`; `null` when `ps` cannot say), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`), `ancestors` (the pids above ci-local when it started, its parent first, up to but not with pid 1, at most 32; `[]` when `ps` cannot say. The Pi extension reads it to tell a run its session started from one that lost its parents since, by `nohup` or `setsid`) |
 | `start` | a step starts | `step`, `index` (from 1), `total`; `log` when quiet; `deviates` (the reason) when the step is marked `--deviates` |
 | `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` when quiet; `deviates` as in `start` |
 | `fail` | a step failed or was interrupted | `step`, `index`, `total`, `exitCode`, `durationMs`; `log` when quiet; `deviates` as in `start` |
 | `end` | after the cleanup | `result` (`passed`, `failed`, `interrupted`), `devStack` (`untouched`, `changed`, `none`), `deviations` (how many `--deviates` steps started), `durationMs` |
+
+#### Events contract
+
+The events file is the contract between the engine and its readers
+(`--status`, the Pi extension). `schema`, on the `queued` and `run` events,
+names its version: `1` now; events from before it have none. Within a schema
+version fields are only added, so a reader ignores the fields it does not know
+and tolerates the newer ones missing. Removing a field, or changing what one
+means, raises `schema`.
+
+`@jals1212/ci-local/status` is the supported reader API (`lastRun`,
+`runState`, `render` and the helpers they use, typed in `status.d.ts`):
+
+```js
+import { lastRun, runState } from '@jals1212/ci-local/status'
+```
 
 ```sh
 # terminal 1

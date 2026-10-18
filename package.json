@@ -16,13 +16,17 @@
     "ci-local": "bin/ci-local"
   },
   "exports": {
+    "./status": {
+      "types": "./status.d.ts",
+      "default": "./status.js"
+    },
     "./parity": {
       "types": "./parity.d.ts",
       "default": "./parity.js"
     },
     "./package.json": "./package.json"
   },
-  "files": ["bin", "docker", "extensions", "skills", "parity.js", "parity.d.ts", "status.js", "CHANGELOG.md"],
+  "files": ["bin", "docker", "extensions", "skills", "parity.js", "parity.d.ts", "status.js", "status.d.ts", "CHANGELOG.md"],
   "pi": {
     "extensions": ["./extensions/ci-local.ts"],
     "skills": ["./skills"]

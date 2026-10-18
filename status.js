@@ -187,6 +187,8 @@ export function runState(events, { now = Date.now(), isAlive = alive } = {}) {
   const fail = events.findLast((event) => event.event === 'fail') ?? null
   return {
     state: stateOf({ end, run, lastQueued, isAlive }),
+    // The events contract version the run wrote (see the README), or null: events from before it have none.
+    schema: run.schema ?? null,
     project: run.project,
     total: run.total,
     commit: run.commit,
