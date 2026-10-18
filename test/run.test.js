@@ -244,6 +244,7 @@ test('--events writes one JSON object per milestone, in order, with --only and -
     'pid',
     'pidStart',
     'project',
+    'schema',
     'session',
     'total',
     'ts',
@@ -260,10 +261,14 @@ test('--events writes one JSON object per milestone, in order, with --only and -
     'pid',
     'pidStart',
     'project',
+    'schema',
     'session',
     'ts',
     'version',
   ])
+  assert.deepEqual([queued.schema, run.schema], [1, 1], 'the events contract version, on the events that open a run')
+  assert.deepEqual(Object.keys(run).slice(0, 3), ['ts', 'event', 'schema'])
+  assert.deepEqual(Object.keys(queued).slice(0, 3), ['ts', 'event', 'schema'])
   assert.equal(queued.project, 'ci-local-selftest')
   assert.equal(run.session, null, 'not started by a Pi session')
   assert.equal(queued.session, null)

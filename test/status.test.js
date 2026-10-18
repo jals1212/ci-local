@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { alive, createPidStartReader, pidStart } from '../status.js'
+import { alive, createPidStartReader, pidStart, runState } from '../status.js'
 
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
@@ -419,6 +419,19 @@ test('BRAND: one emoji names ci-local, before every state mark', async () => {
   const { BRAND, GLYPHS } = await import('../status.js')
   assert.equal(BRAND, '🚦')
   for (const mark of Object.values(GLYPHS)) assert.equal([...mark].length, 1)
+})
+
+test('runState: schema is the events contract version of the run, null for events from before it', () => {
+  const ts = new Date().toISOString()
+  const queued = { ts, event: 'queued', schema: 1, project: 'p', pid: process.pid, ahead: 0, blockedBy: null }
+  const opened = { ts, event: 'run', schema: 1, project: 'p', total: 1, pid: process.pid }
+  const isAlive = () => true
+  assert.equal(runState([queued], { isAlive }).schema, 1, 'waiting: from the queued event')
+  assert.equal(runState([queued, opened], { isAlive }).schema, 1, 'running: from the run event')
+  const { schema: _q, ...oldQueued } = queued
+  const { schema: _r, ...oldRun } = opened
+  assert.equal(runState([oldRun], { isAlive }).schema, null, 'before the schema: null')
+  assert.equal(runState([oldQueued, oldRun], { isAlive }).schema, null)
 })
 
 /** The start time of a live process, read here with its own `ps` call: what a run must record. */

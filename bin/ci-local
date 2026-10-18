@@ -372,6 +372,11 @@ event_time() {
   fi
 }
 
+# The version of the events contract, on the queued and run events (see
+# "Events contract" in the README): raised when a field is removed or changes
+# its meaning, never for one added.
+EVENTS_SCHEMA=1
+
 # emit_event SINCE_MS FIELDS: one line in the --events file. FIELDS is the
 # JSON members after "ts"; with SINCE_MS, "durationMs" since then is added.
 # Leaves the event's time in EV_MS, for the SINCE_MS of a later event; without
@@ -1117,7 +1122,7 @@ emit_queued() {
   local by=null
   [[ -z "$BLOCK_PROJECT" ]] ||
     by="{\"project\":$(json_string "$BLOCK_PROJECT"),\"pid\":${BLOCK_PID:-null}}"
-  emit_event "" "\"event\":\"queued\",\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ancestors\":$RUN_ANCESTORS,\"ahead\":$AHEAD,\"blockedBy\":$by"
+  emit_event "" "\"event\":\"queued\",\"schema\":$EVENTS_SCHEMA,\"project\":$(json_string "$CI_PROJECT"),\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ancestors\":$RUN_ANCESTORS,\"ahead\":$AHEAD,\"blockedBy\":$by"
 }
 
 # Waits for the turn, and takes the lock. Prints what it waits for when that
@@ -1413,7 +1418,7 @@ PLAN_STARTED=1
 # RUN_MS: the run event's time, from which the end event's durationMs counts.
 # pid and pidStart: --status tells a run still going from one killed before its
 # end event, and from another process that was given its pid since.
-emit_event "" "\"event\":\"run\",\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ancestors\":$RUN_ANCESTORS"
+emit_event "" "\"event\":\"run\",\"schema\":$EVENTS_SCHEMA,\"project\":$(json_string "$CI_PROJECT"),\"jobs\":$(json_array "${SELECTED[@]}"),\"total\":${#RUN_INDEXES[@]},\"version\":$(json_string "$CI_LOCAL_VERSION"),\"pid\":$$,\"pidStart\":$MY_START_JSON,\"commit\":$RUN_COMMIT,\"args\":$(json_array ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}),\"logDir\":$RUN_LOG_DIR,\"session\":$RUN_SESSION,\"ancestors\":$RUN_ANCESTORS"
 RUN_MS=${EV_MS:-}
 # Not `run_plan || true`: bash ignores `set -e` in everything under a `||`,
 # subshells included, and host steps rely on it.

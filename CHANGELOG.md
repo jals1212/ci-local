@@ -7,6 +7,16 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Added
+
+- Events: the `queued` and `run` events carry `schema` (`1`), the version of
+  the events contract, which the README now states: fields are only added
+  within a version; removing one or changing its meaning raises `schema`.
+  `--status` and `runState` expose it (`null` for events from before it). (#35)
+- `@jals1212/ci-local/status` is a supported entry point, with types
+  (`status.d.ts`): `lastRun`, `runState`, `render` and the helpers behind
+  them, for readers of the events file such as the Pi extension. (#35)
+
 ## 0.6.0
 
 ### Added
