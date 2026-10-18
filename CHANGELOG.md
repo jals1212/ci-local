@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.5.3
+
 ### Fixed
 
 - A TMPDIR fallback cache that is not private (neither `XDG_CACHE_HOME` nor
