@@ -551,7 +551,7 @@ test('status line: update says when the footer changed, and records a finished r
 // ---------------------------------------------------------------- ci_local_run
 
 /** A repository whose own ci-local (node_modules/.bin) is `script`, a bash body. */
-function launchRepo(script) {
+function repoWithCiLocal(script) {
   const dir = repo('CI_PROJECT="myapp-ci"\n')
   return { dir, bin: fakeCiLocal(dir, script), file: join(dir, 'events.ndjson') }
 }
@@ -574,16 +574,16 @@ async function exitOf(launch) {
 const QUEUED = `printf '{"ts":"%s","event":"queued","project":"myapp-ci","pid":%s,"session":"s","ahead":1,"blockedBy":{"project":"erp-ci","pid":1}}\\n' "$(date -u +%FT%TZ)" $$ >"$EVENTS_FILE"`
 
 test('ciLocalBin: the repository\'s own ci-local, else the one on PATH', () => {
-  const { dir, bin } = launchRepo('exit 0')
+  const { dir, bin } = repoWithCiLocal('exit 0')
   assert.equal(ciLocalBin(dir), bin)
   assert.equal(ciLocalBin(repo('CI_PROJECT=x\n')), 'ci-local')
 })
 
 test('launchRun: detached, in the repository, with the session named and the output in a file', async () => {
-  const { dir } = launchRepo('echo "cwd=$PWD session=$PI_SESSION_ID args=$*"; exit 0')
+  const { dir } = repoWithCiLocal('echo "cwd=$PWD session=$PI_SESSION_ID args=$*"; exit 0')
   const launch = launchRun({ repo: dir, args: ['--only', 'lint'], sessionId: 's-1' })
   assert.equal(typeof launch.pid, 'number')
-  assert.equal(await exitOf(launch), 0)
+  assert.equal((await exitOf(launch)).code, 0)
   const { readFileSync, realpathSync } = await import('node:fs')
   assert.equal(readFileSync(launch.output, 'utf8').trim(), `cwd=${realpathSync(dir)} session=s-1 args=--only lint`)
 })
@@ -592,11 +592,13 @@ test('launchRun: a ci-local that cannot start is an error, not a run', async () 
   const dir = repo('CI_PROJECT="myapp-ci"\n')
   const launch = launchRun({ repo: dir, sessionId: 's', bin: join(dir, 'missing-ci-local') })
   await exitOf(launch)
+  assert.equal(launch.ended, true)
+  assert.equal(launch.code, null)
   assert.match(launch.error, /ENOENT/)
 })
 
 test('waitForStart: the run once its first event names its pid', async () => {
-  const { dir, file } = launchRepo(`${QUEUED}; sleep 5`)
+  const { dir, file } = repoWithCiLocal(`${QUEUED}; sleep 5`)
   const launch = launchRun({ repo: dir, sessionId: 's', env: { ...process.env, EVENTS_FILE: file } })
   try {
     const result = await waitForStart(launch, file, { timeoutMs: 4000, pollMs: 20 })
@@ -609,7 +611,7 @@ test('waitForStart: the run once its first event names its pid', async () => {
 })
 
 test('waitForStart: a run that wrote its events and ended between two looks started, it did not fail to', async () => {
-  const { dir, file } = launchRepo(`${QUEUED}; exit 1`)
+  const { dir, file } = repoWithCiLocal(`${QUEUED}; exit 1`)
   const launch = launchRun({ repo: dir, sessionId: 's', env: { ...process.env, EVENTS_FILE: file } })
   await exitOf(launch)
   const result = await waitForStart(launch, file, { timeoutMs: 1000, pollMs: 20 })
@@ -624,7 +626,7 @@ test('launchRun: a spawn that throws leaves no output directory behind', () => {
 })
 
 test('waitForStart: an aborted wait stops waiting and leaves the run alone', async () => {
-  const { dir, file } = launchRepo('sleep 5')
+  const { dir, file } = repoWithCiLocal('sleep 5')
   const launch = launchRun({ repo: dir, sessionId: 's' })
   try {
     const controller = new AbortController()
@@ -633,7 +635,7 @@ test('waitForStart: an aborted wait stops waiting and leaves the run alone', asy
     const result = await waitForStart(launch, file, { timeoutMs: 4000, pollMs: 20, signal: controller.signal })
     assert.ok(performance.now() - began < 1000, 'not the whole timeout')
     assert.equal(result.kind, 'waiting')
-    assert.equal(launch.code, undefined, 'still running')
+    assert.equal(launch.ended, false, 'still running')
   } finally {
     process.kill(launch.pid)
   }
@@ -662,7 +664,7 @@ test('pruneLaunchOutputs: removes launch outputs older than the age given, and n
 })
 
 test('waitForStart: an exit before any event says so, with the output', async () => {
-  const { dir, file } = launchRepo('echo "ci-local: unknown option --nope" >&2; exit 2')
+  const { dir, file } = repoWithCiLocal('echo "ci-local: unknown option --nope" >&2; exit 2')
   const launch = launchRun({ repo: dir, sessionId: 's' })
   const result = await waitForStart(launch, file, { timeoutMs: 4000, pollMs: 20 })
   assert.equal(result.kind, 'exited')
@@ -672,7 +674,7 @@ test('waitForStart: an exit before any event says so, with the output', async ()
 })
 
 test('waitForStart: still no event at the deadline is a run waiting for the events file', async () => {
-  const { dir, file } = launchRepo('sleep 5')
+  const { dir, file } = repoWithCiLocal('sleep 5')
   const launch = launchRun({ repo: dir, sessionId: 's' })
   try {
     const result = await waitForStart(launch, file, { timeoutMs: 100, pollMs: 20 })
@@ -694,4 +696,23 @@ test('exitCard: a launch that ended before any event, as a failed card with the 
   const passed = exitCard({ pid: 43, code: 0, output: '/tmp/y/output.log', tail: [] })
   assert.equal(passed.state.state, 'passed')
   assert.match(passed.block.lines[0], /✓ \*\*ci-local\*\* · ended before this session saw its run$/)
+  // Killed by a signal: said so, not as a status.
+  const killed = exitCard({ pid: 44, code: null, signal: 'SIGTERM', output: '/tmp/z/output.log', tail: [] })
+  assert.equal(killed.state.state, 'failed')
+  assert.match(killed.block.lines[1], /^> killed by SIGTERM · pid 44 · /)
+})
+
+test('launchRun: a launch killed by a signal records the signal, not a status', async () => {
+  const { dir } = repoWithCiLocal('sleep 5')
+  const launch = launchRun({ repo: dir, sessionId: 's' })
+  process.kill(launch.pid, 'SIGTERM')
+  const ended = await exitOf(launch)
+  assert.equal(ended.code, null)
+  assert.equal(ended.signal, 'SIGTERM')
+  assert.match(launchReport({ kind: 'exited' }, launch, 'myapp-ci'), /^ci-local was killed by SIGTERM before a run started\./)
+})
+
+test('launchReport: a launch killed by a signal before its run says so', () => {
+  const report = launchReport({ kind: 'exited' }, { pid: 5, code: null, signal: 'SIGKILL', output: '/nonexistent/output.log' }, 'myapp-ci')
+  assert.match(report, /^ci-local was killed by SIGKILL before a run started\./)
 })

@@ -336,8 +336,8 @@ test('the ci_local_status tool says the three lines of the last run, or why ther
   }
 })
 
-/** A repository whose own ci-local (node_modules/.bin) runs `script`, a bash body. */
-function launchRepo(project, script) {
+/** glueRepo, with its own ci-local (node_modules/.bin) running `script`, a bash body. */
+function glueRepoWithCiLocal(project, script) {
   const { repo, file } = glueRepo(project)
   fakeCiLocal(repo, script)
   return { repo, file }
@@ -354,7 +354,7 @@ async function until(check, ms = 5000) {
 
 test('ci_local_run starts the run detached, as this session\'s: the tool says it is queued, the footer and a start card follow it', TS, async () => {
   const extension = await loadExtension()
-  const { repo, file } = launchRepo(
+  const { repo, file } = glueRepoWithCiLocal(
     'glue-ci',
     `printf '{"ts":"%s","event":"queued","project":"glue-ci","pid":%s,"session":"%s","ahead":1,"blockedBy":{"project":"other-ci","pid":1}}\\n' "$(date -u +%FT%TZ)" $$ "$PI_SESSION_ID" >"$CI_LOCAL_EVENTS"; exec sleep 30`
   )
@@ -377,7 +377,7 @@ test('ci_local_run starts the run detached, as this session\'s: the tool says it
 test('ci_local_run: a launch that ends before any event, after the tool returned, gets a failed card and a wake', TS, async () => {
   const { createCiLocalExtension } = await import('../extensions/ci-local.ts')
   const extension = createCiLocalExtension({ launchWaitMs: 0 })
-  const { repo, file } = launchRepo('glue-ci', 'sleep 0.3; echo "ci-local: the config is broken" >&2; exit 2')
+  const { repo, file } = glueRepoWithCiLocal('glue-ci', 'sleep 0.3; echo "ci-local: the config is broken" >&2; exit 2')
   await withPolling(file, async (tick) => {
     const me = await openSession(extension, { repo, sessionId: 'me' })
     const result = await me.pi.tools.ci_local_run.execute('call-1', {}, undefined, undefined, me.ctx)
@@ -399,9 +399,26 @@ test('ci_local_run: a launch that ends before any event, after the tool returned
   })
 })
 
+test('ci_local_run: a launch of an earlier session gets no card in the next one', TS, async () => {
+  const { createCiLocalExtension } = await import('../extensions/ci-local.ts')
+  const extension = createCiLocalExtension({ launchWaitMs: 0 })
+  const { repo, file } = glueRepoWithCiLocal('glue-ci', 'sleep 0.3; exit 2')
+  await withPolling(file, async (tick) => {
+    const me = await openSession(extension, { repo, sessionId: 'old' })
+    const result = await me.pi.tools.ci_local_run.execute('call-1', {}, undefined, undefined, me.ctx)
+    // The same extension, now in another session (a /new or a /resume).
+    me.ctx.sessionManager = { getBranch: () => [], getSessionId: () => 'new' }
+    await me.start()
+    await until(() => spawnSync('kill', ['-0', String(result.details.pid)]).status !== 0)
+    tick(5)
+    assert.deepEqual(cards(me), [])
+    assert.deepEqual(me.notices, [])
+  })
+})
+
 test('ci_local_run: an exit while the tool waits is its result, with the output, and no card', TS, async () => {
   const extension = await loadExtension()
-  const { repo, file } = launchRepo('glue-ci', 'echo "ci-local: unknown option --nope" >&2; exit 2')
+  const { repo, file } = glueRepoWithCiLocal('glue-ci', 'echo "ci-local: unknown option --nope" >&2; exit 2')
   await withPolling(file, async (tick) => {
     const me = await openSession(extension, { repo, sessionId: 'me' })
     const result = await me.pi.tools.ci_local_run.execute('call-1', { args: ['--nope'] }, undefined, undefined, me.ctx)
