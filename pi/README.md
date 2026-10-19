@@ -15,9 +15,7 @@ bash tool).
 
 Until 0.7.x, the extension shipped inside `@jals1212/ci-local`. If you
 installed it from there, switch: `pi install npm:@jals1212/ci-local-pi`, then
-`pi remove npm:@jals1212/ci-local`. Until 0.8.0 the CLI keeps a bridge that
-says so once per session and steps aside when this package is loaded, so
-having both never shows a card twice.
+`pi remove npm:@jals1212/ci-local`.
 
 ## What it follows
 

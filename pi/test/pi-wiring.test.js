@@ -1,5 +1,4 @@
-// The Pi extension itself (extensions/ci-local.ts) and the bridge the CLI keeps
-// for one more minor (bridge.ts), loaded with a stand-in Pi:
+// The Pi extension itself (extensions/ci-local.ts), loaded with a stand-in Pi:
 // that its session_start wires the status line to createStatusLine across
 // sessions of one repository, and that the glue around core.js does its job:
 // one notification and one end card per run seen in flight, the delivery
@@ -44,13 +43,7 @@ async function loadExtension() {
   return (await import('../extensions/ci-local.ts')).default
 }
 
-/** The bridge (what the CLI's `pi` entry loads), loaded the same way. */
-async function loadBridge() {
-  register(new URL('./fixture/pi-stubs/hooks.mjs', import.meta.url))
-  return (await import('../bridge.ts')).default
-}
-
-/** What the real package leaves behind while it is loaded (see FLAG in ci-local.ts). */
+/** What the package leaves behind while it is loaded, for a CLI 0.7.x bridge (see FLAG in ci-local.ts). */
 const PACKAGE_FLAG = Symbol.for('@jals1212/ci-local-pi')
 
 /** A session of the extension: its Pi, its context, and what the user sees. */
@@ -342,10 +335,7 @@ test('the ci_local_status tool says the three lines of the last run, or why ther
   }
 })
 
-const MOVED =
-  "ci-local's Pi extension moved to @jals1212/ci-local-pi: pi install npm:@jals1212/ci-local-pi, then pi remove npm:@jals1212/ci-local"
-
-/** Runs `body` as a process where the real package has not loaded (it leaves its flag when it does). */
+/** Runs `body` as a process where the package has not loaded (it leaves its flag when it does). */
 async function withoutPackage(body) {
   delete globalThis[PACKAGE_FLAG]
   try {
@@ -372,106 +362,5 @@ test('the package alone says nothing about moving', TS, async () => {
   await withoutPackage(async () => {
     const me = await openSession(extension, { repo, sessionId: 'me' })
     assert.deepEqual(me.notices, [])
-  })
-})
-
-test('the bridge alone works as the package does, and says once that the extension moved', TS, async () => {
-  const bridge = await loadBridge()
-  const { repo, file } = glueRepo('glue-ci')
-  write(file, [queuedBehind('glue-ci', 'me')])
-
-  await withoutPackage(async () => {
-    await withPolling(file, async (tick) => {
-      const me = await openSession(bridge, { repo, sessionId: 'me' })
-      assert.deepEqual(me.notices, [{ message: MOVED, level: 'warning' }])
-      assert.match(me.statuses.at(-1), /ci-local queued · behind other-ci/)
-      assert.deepEqual(me.pi.entries.map(({ data }) => data.phase), ['starting'])
-      assert.equal(typeof me.pi.tools.ci_local_status?.execute, 'function')
-      assert.ok(me.pi.renderers['ci-local'] && me.pi.renderers['ci-local-start'])
-
-      write(file, [record('queued', { pid: process.pid, session: 'me', ahead: 0, blockedBy: null }), runEvent('glue-ci', 'me'), record('start', { step: 'lint', index: 1, total: 2, log: null })])
-      tick()
-      write(file, [record('ok', { step: 'lint', index: 1, total: 2 }), record('end', { result: 'passed', devStack: 'none', durationMs: 4000 })])
-      tick(Math.ceil(CARD_GRACE_MS / 1000) + 2)
-      assert.match(me.statuses.at(-1), /ci-local passed/)
-      assert.deepEqual(me.notices, [{ message: MOVED, level: 'warning' }, { message: 'ci-local passed · glue-ci', level: 'info' }], 'the moved notice once, then the run’s')
-      assert.equal(cards(me).length, 1)
-      assert.equal(wakes(me).length, 1)
-      assert.deepEqual(me.pi.entries.map(({ data }) => data.phase), ['starting', 'started'])
-    })
-  })
-})
-
-test('the bridge says it for a new or resumed session, not after a reload, and not without a screen', TS, async () => {
-  const bridge = await loadBridge()
-  const { repo } = glueRepo('glue-ci')
-  await withoutPackage(async () => {
-    for (const reason of ['startup', 'new', 'resume', 'fork']) {
-      const me = await openSession(bridge, { repo, sessionId: 'me', reason })
-      assert.deepEqual(me.notices, [{ message: MOVED, level: 'warning' }], reason)
-      await me.shutdown()
-    }
-    const reloaded = await openSession(bridge, { repo, sessionId: 'me', reason: 'reload' })
-    assert.deepEqual(reloaded.notices, [], 'a reload of a session that was told')
-    // Told even in a repository ci-local does not follow: the extension is installed there too.
-    const elsewhere = await openSession(bridge, { repo: tmpdir(), sessionId: 'me' })
-    assert.deepEqual(elsewhere.notices, [{ message: MOVED, level: 'warning' }])
-    const headless = await openSession(bridge, { repo, sessionId: 'me', start: false })
-    headless.ctx.hasUI = false
-    await headless.start()
-    assert.deepEqual(headless.notices, [])
-  })
-})
-
-test('with the package loaded too, the bridge shows and sends nothing, whichever loads first', TS, async () => {
-  const extension = await loadExtension()
-  const bridge = await loadBridge()
-  const { repo, file } = glueRepo('glue-ci')
-
-  for (const order of ['package first', 'bridge first']) {
-    write(file, [queuedBehind('glue-ci', 'me')])
-    await withoutPackage(async () => {
-      await withPolling(file, async (tick) => {
-        const load = (fn) => openSession(fn, { repo, sessionId: 'me', start: false })
-        let real, aside
-        if (order === 'package first') [real, aside] = [await load(extension), await load(bridge)]
-        else [aside, real] = [await load(bridge), await load(extension)]
-        // Both are loaded before either session starts: the bridge looks then, not at load.
-        await real.start()
-        await aside.start()
-
-        write(file, [record('queued', { pid: process.pid, session: 'me', ahead: 0, blockedBy: null }), runEvent('glue-ci', 'me'), record('start', { step: 'lint', index: 1, total: 2, log: null })])
-        tick()
-        write(file, [record('ok', { step: 'lint', index: 1, total: 2 }), record('end', { result: 'passed', devStack: 'none', durationMs: 4000 })])
-        tick(Math.ceil(CARD_GRACE_MS / 1000) + 2)
-        // Pi calls every extension's handlers: the bridge's must do nothing.
-        for (const name of ['agent_start', 'agent_settled', 'turn_end', 'session_compact', 'session_compact_failed']) {
-          await aside.pi.handlers[name]({ type: name }, aside.ctx)
-        }
-        tick(2)
-
-        assert.deepEqual(real.notices.map(({ message }) => message), ['ci-local passed · glue-ci'], `${order}: the package works, and says nothing of moving`)
-        assert.equal(cards(real).length, 1)
-        assert.match(real.statuses.at(-1), /ci-local passed/)
-        assert.deepEqual([aside.statuses, aside.notices, aside.pi.entries, aside.pi.messages], [[], [], [], []], `${order}: the bridge stays silent`)
-        await aside.shutdown()
-        await real.shutdown()
-      })
-    })
-  }
-})
-
-test('the bridge takes over again once the package is gone, as after a reload without it', TS, async () => {
-  const extension = await loadExtension()
-  const bridge = await loadBridge()
-  const { repo } = glueRepo('glue-ci')
-  await withoutPackage(async () => {
-    const real = await openSession(extension, { repo, sessionId: 'me' })
-    const aside = await openSession(bridge, { repo, sessionId: 'me' })
-    assert.deepEqual(aside.notices, [])
-    await real.shutdown()
-    await aside.shutdown()
-    const alone = await openSession(bridge, { repo, sessionId: 'me', reason: 'new' })
-    assert.deepEqual(alone.notices, [{ message: MOVED, level: 'warning' }])
   })
 })

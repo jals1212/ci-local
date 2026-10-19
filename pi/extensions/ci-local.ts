@@ -28,10 +28,6 @@
 // It reads the events file each run writes (see README, "Following a run");
 // it never runs ci-local or Docker. The logic lives in ./core.js.
 //
-// Two packages load this file: @jals1212/ci-local-pi (role 'package') and, for
-// one more minor, the CLI's own `pi` entry (pi/bridge.ts, role 'bridge'). The
-// bridge says once per session that the extension moved, and steps aside when
-// the package is loaded too, so a user with both sees every card once.
 
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { Box, Text } from '@earendil-works/pi-tui'
@@ -56,31 +52,26 @@ const START_KEY = 'ci-local-start'
 /** The hidden wake message (see createDelivery). */
 const WAKE_KEY = 'ci-local-wake'
 const POLL_MS = 1000
-/** Set on globalThis while the package is loaded: how the bridge knows to step aside. */
+/**
+ * Set on globalThis while this package is loaded. A CLI 0.7.x still installed in
+ * Pi loads a bridge that steps aside when it sees this flag, so a user with both
+ * sees every card once. The CLI 0.8.0 has no bridge; the flag stays for 0.7.x.
+ */
 const FLAG = Symbol.for('@jals1212/ci-local-pi')
-const MOVED =
-  "ci-local's Pi extension moved to @jals1212/ci-local-pi: pi install npm:@jals1212/ci-local-pi, then pi remove npm:@jals1212/ci-local"
-
-const packageLoaded = () => (globalThis as Record<symbol, unknown>)[FLAG] === true
 
 type Card = { state: string; lines: string[] }
 /** A start card: the run, its stage ('starting', then 'started'), the --status block. */
 type StartCard = { key: string; phase: 'starting' | 'started'; lines: string[] }
 
-type Role = 'package' | 'bridge'
-
-export function createCiLocalExtension({ role }: { role: Role }) {
-  return (pi: ExtensionAPI) => ciLocal(pi, role)
+export function createCiLocalExtension() {
+  return (pi: ExtensionAPI) => ciLocal(pi)
 }
 
-function ciLocal(pi: ExtensionAPI, role: Role) {
-  // Said at load, before any session starts, so the bridge can see it whatever
-  // the load order; session_shutdown takes it back (a reload without the
-  // package must not find it still there).
-  if (role === 'package') (globalThis as Record<symbol, unknown>)[FLAG] = true
-  // Pi loads the package's extension first or last, we cannot know: the bridge
-  // looks at session_start, and its handlers look again.
-  const aside = () => role === 'bridge' && packageLoaded()
+function ciLocal(pi: ExtensionAPI) {
+  // Said at load, before any session starts, so a CLI 0.7.x bridge can see it
+  // whatever the load order; session_shutdown takes it back (a reload without
+  // this package must not find it still there).
+  ;(globalThis as Record<symbol, unknown>)[FLAG] = true
 
   let timer: ReturnType<typeof setInterval> | undefined
   // The session's end cards, and whether an agent run is under way: it spans
@@ -89,18 +80,16 @@ function ciLocal(pi: ExtensionAPI, role: Role) {
   let runActive = false
 
   pi.on('agent_start', async () => {
-    if (aside()) return
     runActive = true
     delivery?.boundary()
   })
   pi.on('agent_settled', async () => {
-    if (aside()) return
     runActive = false
     delivery?.boundary()
   })
-  pi.on('turn_end', async () => (aside() ? undefined : delivery?.boundary()))
-  pi.on('session_compact', async () => (aside() ? undefined : delivery?.boundary()))
-  pi.on('session_compact_failed', async () => (aside() ? undefined : delivery?.boundary()))
+  pi.on('turn_end', async () => delivery?.boundary())
+  pi.on('session_compact', async () => delivery?.boundary())
+  pi.on('session_compact_failed', async () => delivery?.boundary())
 
   pi.registerEntryRenderer<StartCard>(START_KEY, (entry, _options, theme) => {
     const lines = (entry.data?.lines ?? []).map((line) => line.replace(/^> ?/, '').replaceAll('**', ''))
@@ -154,12 +143,6 @@ function ciLocal(pi: ExtensionAPI, role: Role) {
     stop()
     runActive = false
     if (!ctx.hasUI) return
-    if (aside()) {
-      delivery = undefined // the package does it all; this one shows and sends nothing
-      return
-    }
-    // Not on a reload: the session was told when it started.
-    if (role === 'bridge' && event.reason !== 'reload') ctx.ui.notify(MOVED, 'warning')
     const found = findProject(ctx.cwd)
     if (!found) return
     const file = eventsFileFor(found.project, process.env, found.repo)
@@ -258,8 +241,8 @@ function ciLocal(pi: ExtensionAPI, role: Role) {
 
   pi.on('session_shutdown', async () => {
     stop()
-    if (role === 'package') delete (globalThis as Record<symbol, unknown>)[FLAG]
+    delete (globalThis as Record<symbol, unknown>)[FLAG]
   })
 }
 
-export default createCiLocalExtension({ role: 'package' })
+export default createCiLocalExtension()
