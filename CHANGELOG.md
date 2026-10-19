@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.8.2
+
 ### Fixed
 
 - The published-port check no longer passes what it cannot read: `"$@"` and
