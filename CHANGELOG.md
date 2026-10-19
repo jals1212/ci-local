@@ -7,6 +7,18 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Fixed
+
+- The published-port check reads compose files as compose does: from
+  `COMPOSE_FILE` (split on `COMPOSE_PATH_SEPARATOR`) when no `-f` is given,
+  merged in order with `!reset` and `!override` honoured, and only for the
+  services the command starts (named ones and their `depends_on`, else those
+  of no profile or of an enabled one). A stack whose override resets its ports,
+  with host-network services behind a profile nobody enables, no longer reads
+  as publishing them. `"$@"` and `$1`… in a host step's own function are the
+  arguments the step gives it. `--print-plan` records the exported `COMPOSE_FILE`,
+  `COMPOSE_PROFILES` and `COMPOSE_PATH_SEPARATOR` as `composeEnv`. (#41)
+
 ## 0.8.0
 
 ### Removed

@@ -11,7 +11,7 @@ import { readFile } from 'node:fs/promises'
 import { isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { parse } from 'yaml'
+import { isMap, isScalar, isSeq, parse, parseDocument } from 'yaml'
 
 const run = promisify(execFile)
 const BIN = fileURLToPath(new URL('./bin/ci-local', import.meta.url))
@@ -184,11 +184,23 @@ function runExposure(words) {
   return null
 }
 
-/** The source of a host step's function and of every config function it reaches. */
+/**
+ * The source of a host step's function and of every config function it
+ * reaches. In the step's own function, `"$@"`, `$*` and `$1`… are the
+ * arguments the step gives it (when they hold no space); in the others they
+ * stay, and read as unknown.
+ */
 function reachableSources(plan, step) {
   const functions = plan.functions ?? {}
   const seen = new Set([step.command?.split(' ')[0]])
-  const sources = [step.source ?? '']
+  let own = step.source ?? ''
+  const args = step.args ?? []
+  if (args.every((arg) => arg !== '' && !/[\s'"$;&|(){}]/.test(arg))) {
+    own = own
+      .replace(/"?\$(?:\{[@*]\}|[@*])"?/g, args.join(' '))
+      .replace(/"?\$(?:\{([1-9])\}|([1-9]))"?/g, (match, braced, bare) => args[Number(braced ?? bare) - 1] ?? '')
+  }
+  const sources = [own]
   for (let n = 0; n < sources.length; n++) {
     for (const word of sources[n].match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []) {
       if (Object.hasOwn(functions, word) && !seen.has(word)) {
@@ -208,62 +220,192 @@ const COMPOSE_DEFAULTS = [
   ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'],
   ['compose.override.yaml', 'compose.override.yml', 'docker-compose.override.yaml', 'docker-compose.override.yml'],
 ]
+// Options of `up`/`create` and of `run` that take a value. Taking one for a
+// flag that has none only drops a service name, which counts every service.
+const UP_VALUE_OPTIONS = new Set([
+  '--scale', '-t', '--timeout', '--wait-timeout', '--exit-code-from', '--attach', '--no-attach', '--pull',
+])
+const RUN_VALUE_OPTIONS = new Set([
+  '-e', '--env', '--env-from-file', '--name', '-p', '--publish', '-u', '--user', '-w', '--workdir', '-v',
+  '--volume', '-l', '--label', '--entrypoint', '--pull', '--cap-add', '--cap-drop',
+])
 
-/** The compose files and subcommand of a `docker compose` command. */
+/** The global options and subcommand of a `docker compose` command. */
 function composeCommand(words) {
-  const files = []
+  const command = { files: [], profiles: [], envFile: null, subcommand: null, rest: [] }
   for (let i = 0; i < words.length; i++) {
     const word = words[i]
     const eq = word.indexOf('=')
     const flag = word.startsWith('--') && eq !== -1 ? word.slice(0, eq) : word
     if (COMPOSE_VALUE_OPTIONS.has(flag)) {
       const value = flag === word ? words[++i] : unquote(word.slice(eq + 1))
-      if (flag === '-f' || flag === '--file') files.push(value)
+      if (flag === '-f' || flag === '--file') command.files.push(value)
+      if (flag === '--profile') command.profiles.push(value)
+      if (flag === '--env-file') command.envFile = value
     } else if (!word.startsWith('-')) {
-      return { files, subcommand: word, rest: words.slice(i + 1) }
+      return { ...command, subcommand: word, rest: words.slice(i + 1) }
     }
   }
-  return { files, subcommand: null, rest: [] }
+  return command
 }
 
-/** Problems of the compose files a host step brings up, read from `cwd`. */
-function composeProblems(stepName, { files, subcommand, rest }, { cwd, project }) {
+/** The words of `rest` that are not options or their values, up to `limit`. */
+function positionals(rest, valueOptions, limit = Infinity) {
+  const found = []
+  for (let i = 0; i < rest.length && found.length < limit; i++) {
+    const word = rest[i]
+    if (word === '--') continue
+    if (word.startsWith('-')) {
+      if (valueOptions.has(word)) i++
+      continue
+    }
+    found.push(word)
+  }
+  return found
+}
+
+/** The COMPOSE_ variables of a dotenv file, as compose reads them; {} when it cannot be read. */
+function composeDotenv(path) {
+  const variables = {}
+  let text
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    return variables
+  }
+  for (const line of text.split('\n')) {
+    const match = line.match(/^\s*(?:export\s+)?(COMPOSE_[A-Z_]+)\s*=\s*(.*?)\s*$/)
+    if (match) variables[match[1]] = match[2].replace(/^(['"])(.*)\1$/, '$2')
+  }
+  return variables
+}
+
+const names = (node) => {
+  if (isSeq(node)) return node.items.map((item) => String(isScalar(item) ? item.value : item))
+  if (isMap(node)) return node.items.map((pair) => String(isScalar(pair.key) ? pair.key.value : pair.key))
+  return []
+}
+
+/**
+ * Merges one compose document into `services`, as compose merges files:
+ * `ports`, `profiles` and `depends_on` add up, `network_mode` is replaced,
+ * and `!reset` (cleared) or `!override` (replaced) on a key or a service
+ * stands instead. Only what the port check needs is kept.
+ */
+function mergeCompose(services, document, file) {
+  const node = document.get('services', true)
+  if (!isMap(node)) return
+  for (const pair of node.items) {
+    const name = String(isScalar(pair.key) ? pair.key.value : pair.key)
+    const definition = pair.value
+    if (definition?.tag === '!reset') {
+      services.delete(name)
+      continue
+    }
+    if (definition?.tag === '!override' || !services.has(name)) {
+      services.set(name, { ports: [], networkMode: null, profiles: [], dependsOn: [] })
+    }
+    const service = services.get(name)
+    if (!isMap(definition)) continue
+    for (const { key, value } of definition.items) {
+      const field = isScalar(key) ? key.value : key
+      const replace = value?.tag === '!reset' || value?.tag === '!override'
+      const kept = value?.tag === '!reset' ? null : value
+      if (field === 'network_mode') {
+        const mode = isScalar(kept) ? kept.value : null
+        service.networkMode = mode === null ? null : { mode: String(mode), file }
+      } else if (field === 'ports') {
+        const ports = isSeq(kept) ? kept.items.map(() => file) : []
+        service.ports = replace ? ports : [...service.ports, ...ports]
+      } else if (field === 'profiles' || field === 'depends_on') {
+        const key = field === 'profiles' ? 'profiles' : 'dependsOn'
+        service[key] = replace ? names(kept) : [...service[key], ...names(kept)]
+      }
+    }
+  }
+}
+
+/**
+ * The services a compose command starts: those it names and what they depend
+ * on, or, naming none, those of no profile or of an enabled one. A name or a
+ * profile that cannot be read (a variable) counts every service.
+ */
+function startedServices(services, { subcommand, rest }, profiles) {
+  const named =
+    subcommand === 'run' ? positionals(rest, RUN_VALUE_OPTIONS, 1) : positionals(rest, UP_VALUE_OPTIONS)
+  if (named.some((name) => name.includes('$'))) return new Set(services.keys())
+  const known = named.filter((name) => services.has(name))
+  if (named.length > 0 && known.length === 0) return new Set(services.keys())
+  if (known.length === 0) {
+    const all = profiles.some((profile) => profile === '*' || profile.includes('$'))
+    return new Set(
+      [...services]
+        .filter(([, service]) => all || service.profiles.length === 0 || service.profiles.some((p) => profiles.includes(p)))
+        .map(([name]) => name)
+    )
+  }
+  const started = new Set(known)
+  for (const name of started) {
+    for (const dependency of services.get(name)?.dependsOn ?? []) started.add(dependency)
+  }
+  return started
+}
+
+/**
+ * Problems of the compose files a host step brings up, read from `cwd`:
+ * the `-f` files, else COMPOSE_FILE (from the plan's environment, else the
+ * `.env` file), else the default file and its override; merged in order, and
+ * only the services the command starts.
+ */
+function composeProblems(stepName, command, { cwd, project, composeEnv = {} }) {
+  const { files, subcommand, rest } = command
   if (!['up', 'create', 'run'].includes(subcommand)) return []
   const problems = []
   if (subcommand === 'run' && rest.some((word) => /^(--service-ports|--publish|-p)(=|$)|^-p\d/.test(word))) {
     problems.push(`host step "${stepName}" publishes a port: docker compose run ${rest.join(' ')}`)
   }
+  const resolve = (file) =>
+    file.replace(/\$\{REPO\}|\$REPO\b/g, cwd).replace(/\$\{CI_PROJECT\}|\$CI_PROJECT\b/g, project ?? '')
+  const dotenv = command.envFile ? resolve(command.envFile) : '.env'
+  const env = { ...composeDotenv(isAbsolute(dotenv) ? dotenv : join(cwd, dotenv)), ...composeEnv }
   let paths
   if (files.length > 0) {
-    paths = files.map((file) => ({
-      shown: file,
-      path: file
-        .replace(/\$\{REPO\}|\$REPO\b/g, cwd)
-        .replace(/\$\{CI_PROJECT\}|\$CI_PROJECT\b/g, project ?? ''),
-    }))
+    paths = files.map((file) => ({ shown: file, path: resolve(file) }))
+  } else if (env.COMPOSE_FILE) {
+    paths = env.COMPOSE_FILE.split(env.COMPOSE_PATH_SEPARATOR || ':')
+      .filter(Boolean)
+      .map((file) => ({ shown: file, path: resolve(file) }))
   } else {
     paths = COMPOSE_DEFAULTS.map((names) => names.find((name) => existsSync(join(cwd, name)))).filter(Boolean)
     if (paths.length === 0) return [`host step "${stepName}": cannot find the compose file it brings up`]
     paths = paths.map((name) => ({ shown: name, path: name }))
   }
+  const services = new Map()
   for (const { shown, path } of paths) {
     const full = isAbsolute(path) ? path : join(cwd, path)
-    let compose
+    let document
     try {
       if (path.includes('$')) throw new Error('unresolved variable')
-      compose = parse(readFileSync(full, 'utf8')) ?? {}
+      document = parseDocument(readFileSync(full, 'utf8'))
+      if (document.errors.length > 0) throw document.errors[0]
     } catch {
       problems.push(`host step "${stepName}": cannot check compose file "${shown}" for published ports`)
       continue
     }
-    const name = relative(cwd, full) || full
-    for (const [service, definition] of Object.entries(compose.services ?? {})) {
-      if (subcommand !== 'run' && Array.isArray(definition?.ports) && definition.ports.length > 0) {
-        problems.push(`host step "${stepName}": ${name} publishes ports of service "${service}"`)
-      }
-      if (definition?.network_mode === 'host') {
-        problems.push(`host step "${stepName}": ${name} puts service "${service}" on the host network`)
-      }
+    mergeCompose(services, document, relative(cwd, full) || full)
+  }
+  const profiles = [...command.profiles, ...(env.COMPOSE_PROFILES ?? '').split(',')].filter(Boolean)
+  const started = startedServices(services, command, profiles)
+  // `run` publishes no port of its own service without --service-ports.
+  const target = subcommand === 'run' ? positionals(rest, RUN_VALUE_OPTIONS, 1)[0] : null
+  for (const [name, service] of services) {
+    if (!started.has(name)) continue
+    if (name !== target && service.ports.length > 0) {
+      const from = [...new Set(service.ports)].join(' and ')
+      problems.push(`host step "${stepName}": ${from} publishes ports of service "${name}"`)
+    }
+    if (service.networkMode?.mode === 'host') {
+      problems.push(`host step "${stepName}": ${service.networkMode.file} puts service "${name}" on the host network`)
     }
   }
   return problems
@@ -291,7 +433,9 @@ export function publishedPortProblems(plan, { cwd = process.cwd() } = {}) {
           if (exposure === 'host') problems.push(`host step "${step.name}" puts a container on the host network: ${line}`)
         }
         for (const match of line.matchAll(/\bdocker(?:\s+|-)compose\b(.*)/g)) {
-          problems.push(...composeProblems(step.name, composeCommand(tokens(commandText(match[1]))), { cwd, project: plan.project }))
+          const command = composeCommand(tokens(commandText(match[1])))
+          const context = { cwd, project: plan.project, composeEnv: plan.composeEnv }
+          problems.push(...composeProblems(step.name, command, context))
         }
       }
     }

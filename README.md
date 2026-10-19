@@ -437,11 +437,18 @@ test('ci-local runs what the workflow runs', async () => {
 - `publishedPortProblems(plan, { cwd })`: nothing publishes a port or joins the
   host's network: not the runner, not a `docker run`/`docker create` in a host
   step or in a config function it calls (`-p`, `-p8080:80`, `-dp`, `-P`,
-  `--publish`, `--network host`), and not a compose file such a step brings up
-  (`docker compose -f FILE up|create|run`, or the default `compose.yaml` and its
-  override): `ports:` or `network_mode: host`. `$REPO` and `$CI_PROJECT` in a
-  `-f` path are resolved; a compose file that cannot be found or read is a
-  problem, not a pass.
+  `--publish`, `--network host`), and not a service a compose command in such
+  a step starts (`docker compose up|create|run`): `ports:` or
+  `network_mode: host`. The files are those compose reads: the `-f` files,
+  else `COMPOSE_FILE` (as the config exports it, else from `.env`, split on
+  `COMPOSE_PATH_SEPARATOR`), else the default `compose.yaml` and its override.
+  They are merged in order, as compose merges them (`!reset` and `!override`
+  included). Only the services the command starts count: those it names and
+  what they depend on, or, naming none, those of no profile or of one enabled
+  with `--profile` or `COMPOSE_PROFILES`. `$REPO` and `$CI_PROJECT` in a path
+  are resolved; a compose file that cannot be found or read is a problem, not a
+  pass. In the step's own function, `"$@"` and `$1`… are the arguments the
+  step gives it; a service name that cannot be read counts every service.
 - `nodeVersionProblems(workflow)`: `.nvmrc` is exact and every `setup-node`
   reads it, and only it.
 
