@@ -111,11 +111,11 @@ test('footerText: one short line per state', () => {
   const read = (events) => readRun(eventsFile(events)).state
   assert.match(
     footerText(read([run(), { ts: ago(1), event: 'start', step: 'lint', index: 2, total: 4 }])),
-    /^🚦 ci-local ⧗ \[2\/4\] lint · 1m0[56]s$/
+    /^🚦 ci-local · ⧗ \[2\/4\] lint · 1m0[56]s$/
   )
   assert.equal(
     footerText(read([run(), { ts: ago(1), event: 'end', result: 'passed', durationMs: 61_000, devStack: 'none' }])),
-    '🚦 ci-local ✓ passed · 1m01s'
+    '🚦 ci-local · ✓ passed · 1m01s'
   )
   assert.equal(
     footerText(
@@ -126,20 +126,20 @@ test('footerText: one short line per state', () => {
         { ts: ago(1), event: 'end', result: 'failed', durationMs: 3000, devStack: 'none' },
       ])
     ),
-    '🚦 ci-local ✗ failed at lint · 3s'
+    '🚦 ci-local · ✗ failed at lint · 3s'
   )
-  assert.equal(footerText(read([run({ pid: deadPid() })])), '🚦 ci-local ⊘ stopped')
+  assert.equal(footerText(read([run({ pid: deadPid() })])), '🚦 ci-local · ⊘ stopped')
 })
 
 test('footerText: a queued run says where it stands, not only who runs', () => {
   const queued = (ahead, blockedBy) => ({ state: 'queued', elapsedMs: 0, ahead, blockedBy })
   // Two runs behind the same one tell apart by how many are ahead of each.
-  assert.equal(footerText(queued(1, { project: 'erp-ci', pid: 1 })), '🚦 ci-local ◌ queued · 1 ahead (erp-ci running)')
-  assert.equal(footerText(queued(2, { project: 'erp-ci', pid: 1 })), '🚦 ci-local ◌ queued · 2 ahead (erp-ci running)')
+  assert.equal(footerText(queued(1, { project: 'erp-ci', pid: 1 })), '🚦 ci-local · ◌ queued · 1 ahead (erp-ci running)')
+  assert.equal(footerText(queued(2, { project: 'erp-ci', pid: 1 })), '🚦 ci-local · ◌ queued · 2 ahead (erp-ci running)')
   // Behind a lock holder with no ticket: nobody counted ahead.
-  assert.equal(footerText(queued(0, { project: 'erp-ci', pid: 1 })), '🚦 ci-local ◌ queued · erp-ci running')
-  assert.equal(footerText(queued(3, null)), '🚦 ci-local ◌ queued · 3 ahead')
-  assert.equal(footerText(queued(undefined, null)), '🚦 ci-local ◌ queued', 'no count: none said')
+  assert.equal(footerText(queued(0, { project: 'erp-ci', pid: 1 })), '🚦 ci-local · ◌ queued · erp-ci running')
+  assert.equal(footerText(queued(3, null)), '🚦 ci-local · ◌ queued · 3 ahead')
+  assert.equal(footerText(queued(undefined, null)), '🚦 ci-local · ◌ queued', 'no count: none said')
 })
 
 test('the tracker reports an end only for a run it saw in flight', () => {

@@ -284,10 +284,10 @@ export function createStatusLine({ file, sessionId, reason }) {
   }
 }
 
-/** One short line for the footer: `🚦 ci-local ✓ passed · 4m12s`. */
+/** One short line for the footer: `🚦 ci-local · ✓ passed · 4m12s`. */
 export function footerText(state) {
   // The state's glyph sits by the state, after the name.
-  return `${BRAND} ci-local ${GLYPHS[state.state] ?? GLYPHS.stopped} ${stateText(state)}`
+  return `${BRAND} ci-local · ${GLYPHS[state.state] ?? GLYPHS.stopped} ${stateText(state)}`
 }
 
 /** The state of a run in a few words, as the footer says it after its glyph. */
