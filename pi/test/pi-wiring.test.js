@@ -118,10 +118,10 @@ test('the extension wires session_start to the status line: shown once delivered
   const saved = process.env.CI_LOCAL_EVENTS
   process.env.CI_LOCAL_EVENTS = events
   try {
-    assert.match(await shown({ repo, sessionId: 'a', reason: 'startup' }), /ci-local ✓ passed/, 'undelivered: shown')
+    assert.match(await shown({ repo, sessionId: 'a', reason: 'startup' }), /ci-local · ✓ passed/, 'undelivered: shown')
     assert.equal(await shown({ repo, sessionId: 'b', reason: 'new' }), undefined, 'delivered by a: left out')
     assert.equal(await shown({ repo, sessionId: 'b', reason: 'reload' }), undefined, 'b’s reload keeps it out')
-    assert.match(await shown({ repo, sessionId: 'a', reason: 'reload' }), /ci-local ✓ passed/, 'a’s reload keeps it')
+    assert.match(await shown({ repo, sessionId: 'a', reason: 'reload' }), /ci-local · ✓ passed/, 'a’s reload keeps it')
     assert.equal(await shown({ repo, sessionId: 'a', reason: 'resume' }), undefined, 'a resumed later: already read')
   } finally {
     if (saved === undefined) delete process.env.CI_LOCAL_EVENTS
@@ -136,13 +136,13 @@ test('a run seen in flight then finished: one footer trail, one notification, on
 
   await withPolling(file, async (tick) => {
     const me = await openSession(extension, { repo, sessionId: 'me' })
-    assert.match(me.statuses.at(-1), /ci-local ◌ queued · 1 ahead \(other-ci running\)/)
+    assert.match(me.statuses.at(-1), /ci-local · ◌ queued · 1 ahead \(other-ci running\)/)
     assert.deepEqual(me.pi.entries.map(({ customType, data }) => [customType, data.phase]), [['ci-local-start', 'starting']], 'a start card when it waits for its turn')
     assert.match(me.pi.entries[0].data.lines[0], /queued/)
 
     write(file, [record('queued', { pid: process.pid, session: 'me', ahead: 0, blockedBy: null }), runEvent('glue-ci', 'me'), record('start', { step: 'lint', index: 1, total: 2, log: null })])
     tick()
-    assert.match(me.statuses.at(-1), /ci-local ⧗ \[1\/2\] lint/)
+    assert.match(me.statuses.at(-1), /ci-local · ⧗ \[1\/2\] lint/)
     assert.deepEqual(me.pi.entries.map(({ data }) => data.phase), ['starting', 'started'], 'another when its steps start')
     tick(3)
     assert.equal(me.pi.entries.length, 2, 'never repeated')
@@ -151,7 +151,7 @@ test('a run seen in flight then finished: one footer trail, one notification, on
 
     write(file, [record('ok', { step: 'lint', index: 1, total: 2 }), record('end', { result: 'passed', devStack: 'none', durationMs: 4000 })])
     tick()
-    assert.match(me.statuses.at(-1), /ci-local ✓ passed/)
+    assert.match(me.statuses.at(-1), /ci-local · ✓ passed/)
     assert.deepEqual(me.notices, [{ message: 'ci-local passed · glue-ci', level: 'info' }])
     // An idle agent: the card is stored without a turn...
     assert.equal(cards(me).length, 1)
@@ -247,10 +247,10 @@ test('a run of another session gets no card, no notification and no wake, but sh
 
   await withPolling(file, async (tick) => {
     const me = await openSession(extension, { repo, sessionId: 'me' })
-    assert.match(me.statuses.at(-1), /ci-local ⧗ \[1\/2\] lint/, 'in the status line')
+    assert.match(me.statuses.at(-1), /ci-local · ⧗ \[1\/2\] lint/, 'in the status line')
     write(file, [record('ok', { step: 'lint', index: 1, total: 2 }), record('end', { result: 'passed', devStack: 'none', durationMs: 4000 })])
     tick()
-    assert.match(me.statuses.at(-1), /ci-local ✓ passed/)
+    assert.match(me.statuses.at(-1), /ci-local · ✓ passed/)
     tick(Math.ceil(CARD_GRACE_MS / 1000) + 2)
     assert.deepEqual(me.pi.entries, [], 'no start card')
     assert.deepEqual(me.notices, [])
@@ -266,7 +266,7 @@ test('a run already over when the session starts is no news: no notification, no
   await withPolling(file, async (tick) => {
     const me = await openSession(extension, { repo, sessionId: 'me' })
     tick(3)
-    assert.match(me.statuses.at(-1), /ci-local ✓ passed/)
+    assert.match(me.statuses.at(-1), /ci-local · ✓ passed/)
     assert.deepEqual([me.notices, me.pi.entries, me.pi.messages], [[], [], []])
   })
 })
@@ -365,7 +365,7 @@ test('ci_local_run starts the run detached, as this session\'s: the tool says it
       assert.equal(result.details.kind, 'started')
       assert.match(result.content[0].text, /^ci-local started \(pid \d+\) for glue-ci: queued · 1 ahead \(other-ci running\)\./)
       tick()
-      assert.match(me.statuses.at(-1), /ci-local ◌ queued · 1 ahead \(other-ci running\)/)
+      assert.match(me.statuses.at(-1), /ci-local · ◌ queued · 1 ahead \(other-ci running\)/)
       assert.deepEqual(me.pi.entries.map(({ data }) => data.phase), ['starting'], 'its own run: a start card')
       assert.deepEqual(wakes(me), [])
     } finally {

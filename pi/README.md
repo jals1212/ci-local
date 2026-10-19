@@ -23,8 +23,8 @@ In a session opened inside a repository with `ci-local.config.sh` (with a
 literal `CI_PROJECT=`), it follows the events file of that project; it never
 runs ci-local or Docker itself:
 
-- **Status line**: `🚦 ci-local ◌ queued · 2 ahead (erp-ci running)`, `🚦 ci-local ⧗ [3/8] lint · 2m05s`,
-  then `🚦 ci-local ✓ passed · 4m12s` or `🚦 ci-local ✗ failed at lint · 2m10s` until
+- **Status line**: `🚦 ci-local · ◌ queued · 2 ahead (erp-ci running)`, `🚦 ci-local · ⧗ [3/8] lint · 2m05s`,
+  then `🚦 ci-local · ✓ passed · 4m12s` or `🚦 ci-local · ✗ failed at lint · 2m10s` until
   the next run. A run already over when a session starts shows only while its
   result is undelivered, like an unread message: it ended with no session of
   the repository open. Once a session has shown it finished, a later session
