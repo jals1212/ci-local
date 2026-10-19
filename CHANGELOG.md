@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.8.1
+
 ### Fixed
 
 - The published-port check reads compose files as compose does: from
