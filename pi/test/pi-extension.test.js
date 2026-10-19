@@ -22,6 +22,13 @@ import {
   eventsFileFor,
   findProject,
   footerText,
+  ciLocalBin,
+  exitCard,
+  launchReport,
+  launchRun,
+  outputTail,
+  pruneLaunchOutputs,
+  waitForStart,
   launchedBy,
   ownsRun,
   parentPid,
@@ -31,6 +38,7 @@ import {
   readDelivered,
   staleAtStart,
 } from '../extensions/core.js'
+import { fakeCiLocal } from './fixture/fake-ci-local.js'
 
 function repo(config) {
   const dir = mkdtempSync(join(tmpdir(), 'pi-ext-'))
@@ -131,6 +139,7 @@ test('footerText: a queued run says where it stands, not only who runs', () => {
   // Behind a lock holder with no ticket: nobody counted ahead.
   assert.equal(footerText(queued(0, { project: 'erp-ci', pid: 1 })), '🚦 ci-local ◌ queued · erp-ci running')
   assert.equal(footerText(queued(3, null)), '🚦 ci-local ◌ queued · 3 ahead')
+  assert.equal(footerText(queued(undefined, null)), '🚦 ci-local ◌ queued', 'no count: none said')
 })
 
 test('the tracker reports an end only for a run it saw in flight', () => {
@@ -537,4 +546,152 @@ test('status line: update says when the footer changed, and records a finished r
   assert.equal(line.update(readRun(file)).changed, true)
   assert.equal(line.update(readRun(file)).changed, false)
   assert.equal(line.update(null).changed, true, 'no run any more: the footer is cleared')
+})
+
+// ---------------------------------------------------------------- ci_local_run
+
+/** A repository whose own ci-local (node_modules/.bin) is `script`, a bash body. */
+function launchRepo(script) {
+  const dir = repo('CI_PROJECT="myapp-ci"\n')
+  return { dir, bin: fakeCiLocal(dir, script), file: join(dir, 'events.ndjson') }
+}
+
+/**
+ * The exit of a launch. Its child is unref'd (Pi must not wait on it), so
+ * awaiting it alone leaves the event loop empty: Node 22's runner then
+ * cancels the test. A timer holds the loop meanwhile.
+ */
+async function exitOf(launch) {
+  const hold = setInterval(() => {}, 1000)
+  try {
+    return await launch.exited
+  } finally {
+    clearInterval(hold)
+  }
+}
+
+/** A bash line that writes this process's queued event to $EVENTS_FILE. */
+const QUEUED = `printf '{"ts":"%s","event":"queued","project":"myapp-ci","pid":%s,"session":"s","ahead":1,"blockedBy":{"project":"erp-ci","pid":1}}\\n' "$(date -u +%FT%TZ)" $$ >"$EVENTS_FILE"`
+
+test('ciLocalBin: the repository\'s own ci-local, else the one on PATH', () => {
+  const { dir, bin } = launchRepo('exit 0')
+  assert.equal(ciLocalBin(dir), bin)
+  assert.equal(ciLocalBin(repo('CI_PROJECT=x\n')), 'ci-local')
+})
+
+test('launchRun: detached, in the repository, with the session named and the output in a file', async () => {
+  const { dir } = launchRepo('echo "cwd=$PWD session=$PI_SESSION_ID args=$*"; exit 0')
+  const launch = launchRun({ repo: dir, args: ['--only', 'lint'], sessionId: 's-1' })
+  assert.equal(typeof launch.pid, 'number')
+  assert.equal(await exitOf(launch), 0)
+  const { readFileSync, realpathSync } = await import('node:fs')
+  assert.equal(readFileSync(launch.output, 'utf8').trim(), `cwd=${realpathSync(dir)} session=s-1 args=--only lint`)
+})
+
+test('launchRun: a ci-local that cannot start is an error, not a run', async () => {
+  const dir = repo('CI_PROJECT="myapp-ci"\n')
+  const launch = launchRun({ repo: dir, sessionId: 's', bin: join(dir, 'missing-ci-local') })
+  await exitOf(launch)
+  assert.match(launch.error, /ENOENT/)
+})
+
+test('waitForStart: the run once its first event names its pid', async () => {
+  const { dir, file } = launchRepo(`${QUEUED}; sleep 5`)
+  const launch = launchRun({ repo: dir, sessionId: 's', env: { ...process.env, EVENTS_FILE: file } })
+  try {
+    const result = await waitForStart(launch, file, { timeoutMs: 4000, pollMs: 20 })
+    assert.equal(result.kind, 'started')
+    assert.equal(result.run.state.state, 'queued')
+    assert.match(launchReport(result, launch, 'myapp-ci'), /^ci-local started \(pid \d+\) for myapp-ci: queued · 1 ahead \(erp-ci running\)\./)
+  } finally {
+    process.kill(launch.pid)
+  }
+})
+
+test('waitForStart: a run that wrote its events and ended between two looks started, it did not fail to', async () => {
+  const { dir, file } = launchRepo(`${QUEUED}; exit 1`)
+  const launch = launchRun({ repo: dir, sessionId: 's', env: { ...process.env, EVENTS_FILE: file } })
+  await exitOf(launch)
+  const result = await waitForStart(launch, file, { timeoutMs: 1000, pollMs: 20 })
+  assert.equal(result.kind, 'started')
+})
+
+test('launchRun: a spawn that throws leaves no output directory behind', () => {
+  const dir = repo('CI_PROJECT="myapp-ci"\n')
+  const before = readdirSync(tmpdir()).filter((name) => name.startsWith('ci-local-run-')).length
+  assert.throws(() => launchRun({ repo: dir, sessionId: 's', args: ['bad\0arg'] }))
+  assert.equal(readdirSync(tmpdir()).filter((name) => name.startsWith('ci-local-run-')).length, before)
+})
+
+test('waitForStart: an aborted wait stops waiting and leaves the run alone', async () => {
+  const { dir, file } = launchRepo('sleep 5')
+  const launch = launchRun({ repo: dir, sessionId: 's' })
+  try {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 50)
+    const began = performance.now()
+    const result = await waitForStart(launch, file, { timeoutMs: 4000, pollMs: 20, signal: controller.signal })
+    assert.ok(performance.now() - began < 1000, 'not the whole timeout')
+    assert.equal(result.kind, 'waiting')
+    assert.equal(launch.code, undefined, 'still running')
+  } finally {
+    process.kill(launch.pid)
+  }
+})
+
+test('outputTail: only the end of a large output is read', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'tail-')), 'output.log')
+  writeFileSync(file, 'x'.repeat(1_000_000) + '\nlast one\nlast two\n')
+  assert.deepEqual(outputTail(file, 2), ['last one', 'last two'])
+})
+
+test('pruneLaunchOutputs: removes launch outputs older than the age given, and nothing else', () => {
+  const base = mkdtempSync(join(tmpdir(), 'prune-'))
+  const old = join(base, 'ci-local-run-old')
+  const fresh = join(base, 'ci-local-run-new')
+  const other = join(base, 'something-else')
+  for (const dir of [old, fresh, other]) {
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'output.log'), 'x')
+  }
+  const longAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000)
+  utimesSync(old, longAgo, longAgo)
+  utimesSync(other, longAgo, longAgo)
+  pruneLaunchOutputs({ dir: base, maxAgeMs: 7 * 24 * 3600 * 1000 })
+  assert.deepEqual(readdirSync(base).sort(), ['ci-local-run-new', 'something-else'])
+})
+
+test('waitForStart: an exit before any event says so, with the output', async () => {
+  const { dir, file } = launchRepo('echo "ci-local: unknown option --nope" >&2; exit 2')
+  const launch = launchRun({ repo: dir, sessionId: 's' })
+  const result = await waitForStart(launch, file, { timeoutMs: 4000, pollMs: 20 })
+  assert.equal(result.kind, 'exited')
+  const report = launchReport(result, launch, 'myapp-ci')
+  assert.match(report, /^ci-local exited with status 2 before a run started/)
+  assert.match(report, /unknown option --nope/)
+})
+
+test('waitForStart: still no event at the deadline is a run waiting for the events file', async () => {
+  const { dir, file } = launchRepo('sleep 5')
+  const launch = launchRun({ repo: dir, sessionId: 's' })
+  try {
+    const result = await waitForStart(launch, file, { timeoutMs: 100, pollMs: 20 })
+    assert.equal(result.kind, 'waiting')
+    assert.match(launchReport(result, launch, 'myapp-ci'), /^ci-local launched \(pid \d+\) for myapp-ci, no event yet/)
+  } finally {
+    process.kill(launch.pid)
+  }
+})
+
+test('exitCard: a launch that ended before any event, as a failed card with the output tail', () => {
+  const card = exitCard({ pid: 42, code: 2, output: '/tmp/x/output.log', tail: ['a', 'b'] })
+  assert.equal(card.key, 'launch:42')
+  assert.equal(card.state.state, 'failed')
+  assert.equal(card.state.pid, 42)
+  assert.match(card.block.lines[0], /✗ \*\*ci-local\*\* · ended before this session saw its run$/)
+  assert.deepEqual(card.block.lines.slice(-2), ['> a', '> b'])
+  // Status 0: its run passed (or it had nothing to run), not a failure.
+  const passed = exitCard({ pid: 43, code: 0, output: '/tmp/y/output.log', tail: [] })
+  assert.equal(passed.state.state, 'passed')
+  assert.match(passed.block.lines[0], /✓ \*\*ci-local\*\* · ended before this session saw its run$/)
 })

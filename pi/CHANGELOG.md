@@ -6,6 +6,17 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+### Added
+
+- Tool `ci_local_run`: starts the repository's own ci-local
+  (`node_modules/.bin`, else `PATH`) detached, named for the session, and
+  returns once the run is queued or started, or with its output when it ends
+  first (`--list`, a usage or config error). No background job, so no job
+  notice next to the end card. A launch that ends later without the session
+  ever seeing its run gets a failed end card with the end of its output.
+  Launch outputs live under `$TMPDIR` and are removed after a week. The skill starts
+  runs with it when present.
+
 ### Changed
 
 - Status line: the state's glyph sits by the state, after the name
