@@ -187,18 +187,21 @@ function runExposure(words) {
 /**
  * The source of a host step's function and of every config function it
  * reaches. In the step's own function, `"$@"`, `$*` and `$1`… are the
- * arguments the step gives it (when they hold no space); in the others they
- * stay, and read as unknown.
+ * arguments the step gives it, when the plan records them, none holds a space
+ * and the function does not move them (`shift`, `set --`); otherwise, and in
+ * the other functions, they stay, and read as unknown. So does a `$N` past the
+ * last argument.
  */
 function reachableSources(plan, step) {
   const functions = plan.functions ?? {}
   const seen = new Set([step.command?.split(' ')[0]])
   let own = step.source ?? ''
-  const args = step.args ?? []
-  if (args.every((arg) => arg !== '' && !/[\s'"$;&|(){}]/.test(arg))) {
+  const args = step.args
+  const readable = Array.isArray(args) && args.every((arg) => arg !== '' && !/[\s'"$;&|(){}]/.test(arg))
+  if (readable && !/\b(?:shift\b|set\s+--)/.test(own)) {
     own = own
       .replace(/"?\$(?:\{[@*]\}|[@*])"?/g, args.join(' '))
-      .replace(/"?\$(?:\{([1-9])\}|([1-9]))"?/g, (match, braced, bare) => args[Number(braced ?? bare) - 1] ?? '')
+      .replace(/"?\$(?:\{([1-9])\}|([1-9]))"?/g, (match, braced, bare) => args[Number(braced ?? bare) - 1] ?? match)
   }
   const sources = [own]
   for (let n = 0; n < sources.length; n++) {
@@ -232,7 +235,7 @@ const RUN_VALUE_OPTIONS = new Set([
 
 /** The global options and subcommand of a `docker compose` command. */
 function composeCommand(words) {
-  const command = { files: [], profiles: [], envFile: null, subcommand: null, rest: [] }
+  const command = { files: [], profiles: [], envFiles: [], subcommand: null, rest: [] }
   for (let i = 0; i < words.length; i++) {
     const word = words[i]
     const eq = word.indexOf('=')
@@ -241,7 +244,7 @@ function composeCommand(words) {
       const value = flag === word ? words[++i] : unquote(word.slice(eq + 1))
       if (flag === '-f' || flag === '--file') command.files.push(value)
       if (flag === '--profile') command.profiles.push(value)
-      if (flag === '--env-file') command.envFile = value
+      if (flag === '--env-file') command.envFiles.push(value)
     } else if (!word.startsWith('-')) {
       return { ...command, subcommand: word, rest: words.slice(i + 1) }
     }
@@ -338,11 +341,14 @@ function mergeCompose(services, document, file) {
         const mode = isScalar(kept) ? kept.value : null
         service.networkMode = mode === null ? null : { mode: String(mode), file }
       } else if (field === 'ports') {
-        const ports = isSeq(kept) ? kept.items.map(() => file) : []
+        // Not a list (an alias to one port, a variable): counted, not dropped.
+        const ports = isSeq(kept) ? kept.items.map(() => file) : kept == null || kept.value == null ? [] : [file]
         service.ports = replace ? ports : [...service.ports, ...ports]
       } else if (field === 'profiles' || field === 'depends_on') {
         const key = field === 'profiles' ? 'profiles' : 'dependsOn'
-        service[key] = replace ? names(document, kept) : [...service[key], ...names(document, kept)]
+        // Profiles that are not a list read as unknown: the service counts.
+        const given = field === 'profiles' && kept != null && !isSeq(kept) ? ['$'] : names(document, kept)
+        service[key] = replace ? given : [...service[key], ...given]
       }
     }
   }
@@ -363,7 +369,12 @@ function startedServices(services, { subcommand, rest }, profiles) {
     const all = profiles.some((profile) => profile === '*' || profile.includes('$'))
     return new Set(
       [...services]
-        .filter(([, service]) => all || service.profiles.length === 0 || service.profiles.some((p) => profiles.includes(p)))
+        .filter(
+          ([, service]) =>
+            all ||
+            service.profiles.length === 0 ||
+            service.profiles.some((profile) => profile.includes('$') || profiles.includes(profile))
+        )
         .map(([name]) => name)
     )
   }
@@ -389,8 +400,11 @@ function composeProblems(stepName, command, { cwd, project, composeEnv = {} }) {
   }
   const resolve = (file) =>
     file.replace(/\$\{REPO\}|\$REPO\b/g, cwd).replace(/\$\{CI_PROJECT\}|\$CI_PROJECT\b/g, project ?? '')
-  const dotenv = command.envFile ? resolve(command.envFile) : '.env'
-  const env = { ...composeDotenv(isAbsolute(dotenv) ? dotenv : join(cwd, dotenv)), ...composeEnv }
+  // The env files compose reads instead of `.env`, later ones winning.
+  let envFiles = command.envFiles
+  if (envFiles.length === 0) envFiles = composeEnv.COMPOSE_ENV_FILES?.split(',').filter(Boolean) ?? ['.env']
+  const fromFiles = envFiles.map(resolve).map((path) => composeDotenv(isAbsolute(path) ? path : join(cwd, path)))
+  const env = { ...Object.assign({}, ...fromFiles), ...composeEnv }
   let paths
   if (files.length > 0) {
     paths = files.map((file) => ({ shown: file, path: resolve(file) }))
@@ -427,8 +441,13 @@ function composeProblems(stepName, command, { cwd, project, composeEnv = {} }) {
       const from = [...new Set(service.ports)].join(' and ')
       problems.push(`host step "${stepName}": ${from} publishes ports of service "${name}"`)
     }
-    if (service.networkMode?.mode === 'host') {
-      problems.push(`host step "${stepName}": ${service.networkMode.file} puts service "${name}" on the host network`)
+    const network = service.networkMode
+    if (network?.mode === 'host') {
+      problems.push(`host step "${stepName}": ${network.file} puts service "${name}" on the host network`)
+    } else if (network?.mode.includes('$')) {
+      problems.push(
+        `host step "${stepName}": ${network.file} may put service "${name}" on the host network: network_mode "${network.mode}"`
+      )
     }
   }
   return problems

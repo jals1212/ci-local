@@ -373,6 +373,67 @@ services:
   ])
 })
 
+test('"$@" is not substituted when the plan has no arguments, or the function moves them', () => {
+  const cwd = dossier()
+  const hostNetwork = [
+    'host step "Services": docker-compose.yml puts service "api" on the host network',
+    'host step "Services": docker-compose.yml puts service "worker" on the host network',
+  ]
+  for (const [source, args] of [
+    ['start () { docker compose up -d "$@"; }', undefined],
+    ['start () { shift; docker compose up -d "$@"; }', ['postgres', 'api']],
+    ['start () { set -- postgres api; docker compose up -d "$@"; }', ['postgres']],
+    ['start () { docker compose up -d "$1" "$2"; }', ['postgres']],
+  ]) {
+    const plan = hostPlan(source, { composeEnv: { COMPOSE_FILE } })
+    plan.steps[0].args = args
+    assert.deepEqual(publishedPortProblems(plan, { cwd }), hostNetwork, source)
+  }
+})
+
+test('a profile, ports or network_mode that cannot be read counts as published', () => {
+  const cwd = composeProject({
+    'compose.yaml': `x-port: &port "80:80"
+services:
+  varprofile:
+    profiles: ["\${P:-app}"]
+    network_mode: host
+  oddprofile:
+    profiles: app
+    network_mode: host
+  scalarports:
+    ports: *port
+  varnet:
+    network_mode: "\${NET:-host}"
+  bridge:
+    network_mode: bridge
+`,
+  })
+  assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose up -d; }'), { cwd }), [
+    'host step "Services": compose.yaml puts service "varprofile" on the host network',
+    'host step "Services": compose.yaml puts service "oddprofile" on the host network',
+    'host step "Services": compose.yaml publishes ports of service "scalarports"',
+    'host step "Services": compose.yaml may put service "varnet" on the host network: network_mode "${NET:-host}"',
+  ])
+})
+
+test('COMPOSE_ENV_FILES, or --env-file, replaces .env', () => {
+  const cwd = dossier({
+    '.env': 'COMPOSE_PROFILES=app\n',
+    'ci.env': `COMPOSE_FILE=${COMPOSE_FILE}\n`,
+    'more.env': 'COMPOSE_PROFILES=app\n',
+  })
+  const hostNetwork = [
+    'host step "Services": docker-compose.yml puts service "api" on the host network',
+    'host step "Services": docker-compose.yml puts service "worker" on the host network',
+  ]
+  const problems = (source, composeEnv = {}) => publishedPortProblems(hostPlan(source, { composeEnv }), { cwd })
+  assert.deepEqual(problems('up () { docker compose up -d; }', { COMPOSE_ENV_FILES: 'ci.env' }), [])
+  assert.deepEqual(problems('up () { docker compose up -d; }', { COMPOSE_ENV_FILES: '$REPO/ci.env,more.env' }), hostNetwork)
+  assert.deepEqual(problems('up () { docker compose --env-file ci.env up -d; }'), [])
+  assert.deepEqual(problems('up () { docker compose --env-file ci.env --env-file more.env up -d; }'), hostNetwork)
+})
+
 test('compose run publishes the ports of what it depends on, not of its own service', () => {
   const cwd = dossier({ 'docker/ci-local/compose.override.yml': 'services:\n  api:\n    network_mode: !reset null\n    ports: ["80:80"]\n' })
   const plan = hostPlan('up () { docker compose run --rm -e X=1 api npm test; }', { composeEnv: { COMPOSE_FILE } })
