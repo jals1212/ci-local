@@ -6,6 +6,14 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.1.1
+
+### Changed
+
+- The bridge role is gone from the extension: the CLI 0.8.0 no longer has a
+  bridge. The flag that keeps a CLI 0.7.x bridge quiet while this package is
+  loaded stays. (#35)
+
 ## 0.1.0
 
 ### Added

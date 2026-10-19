@@ -151,7 +151,7 @@ a step fails, the last 40 lines of its log. The log directory is printed at
 the start and left in place after the run:
 
 ```text
-ci-local 0.7.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+ci-local 0.8.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 Step output: /tmp/myapp-ci-logs.Xa81Qe
 Events: /home/me/.cache/ci-local/myapp-ci.ndjson (ci-local --status)
 
@@ -327,7 +327,7 @@ that finds the machine busy waits:
 Waiting for other-ci (pid 48213) · 1 ahead
 ...
 Queue: your turn after 4m12s
-ci-local 0.7.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+ci-local 0.8.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 ```
 
 The line is printed again only when whom the run waits for, or how many are
@@ -401,12 +401,9 @@ a read-only tool for the agent, and it only reads the events file each run
 writes; see [its README](pi/README.md) for what it shows and which Pi it
 needs.
 
-Until 0.7.x this package carried the extension itself. If you installed it
-from here, switch: `pi install npm:@jals1212/ci-local-pi`, then
-`pi remove npm:@jals1212/ci-local`. Until 0.8.0 the Pi entry that remains here
-says so once per session, and steps aside when the new package is loaded too.
-While both are installed Pi also reports a `name "ci-local" collision` for the
-skill: both copies are the same, and it goes once the old package is removed.
+Coming from 0.4–0.7, where this package carried the extension:
+`pi install npm:@jals1212/ci-local-pi`, then `pi remove npm:@jals1212/ci-local`
+(the CLI no longer loads in Pi from 0.8.0).
 
 Outside Pi nothing changes: `npx ci-local` does not use any of this.
 

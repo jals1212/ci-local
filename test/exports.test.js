@@ -2,11 +2,14 @@
 // that status.d.ts names only what status.js has.
 
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import * as local from '../status.js'
 
+const root = fileURLToPath(new URL('..', import.meta.url))
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 test('@jals1212/ci-local/status is status.js, imported by the package name', async () => {
@@ -30,14 +33,23 @@ test('every value status.d.ts declares exists in status.js, and status.js export
   assert.deepEqual(values.sort(), Object.keys(local).sort())
 })
 
-test('the CLI still has a Pi entry, the bridge, and ships it without pi/package.json', () => {
-  assert.deepEqual(pkg.pi, { extensions: ['./pi/bridge.ts'], skills: ['./pi/skills'] })
-  for (const file of ['pi/bridge.ts', 'pi/extensions', 'pi/skills']) {
-    assert.ok(pkg.files.includes(file), `files has ${file}`)
-    assert.ok(existsSync(new URL(`../${file}`, import.meta.url)), `${file} exists`)
-  }
-  // Inside the installed CLI the nearest package.json must be the CLI's, or
-  // '@jals1212/ci-local/status' would not resolve from pi/extensions/core.js.
-  assert.ok(!pkg.files.some((file) => file === 'pi' || file.startsWith('pi/package')))
+test('the CLI is not a Pi package: no pi manifest, nothing of pi/ shipped, no Pi peers', () => {
+  assert.equal(pkg.pi, undefined)
+  assert.ok(!pkg.keywords.includes('pi-package'), 'the pi-package keyword belongs to @jals1212/ci-local-pi')
+  assert.deepEqual(
+    pkg.files.filter((file) => file === 'pi' || file.startsWith('pi/')),
+    []
+  )
   assert.equal(pkg.peerDependencies, undefined, 'the Pi peers belong to @jals1212/ci-local-pi')
+})
+
+test('npm pack ships nothing from pi/', () => {
+  const out = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: root, encoding: 'utf8' })
+  assert.equal(out.status, 0, out.stderr)
+  // npm 11 prints an object keyed by package name, older npm an array.
+  const packed = JSON.parse(out.stdout)
+  const [{ files }] = Array.isArray(packed) ? packed : Object.values(packed)
+  const shipped = files.map((file) => file.path)
+  assert.deepEqual(shipped.filter((path) => path.startsWith('pi/')), [])
+  assert.ok(shipped.includes('bin/ci-local') && shipped.includes('status.js'))
 })

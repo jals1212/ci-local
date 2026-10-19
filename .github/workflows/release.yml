@@ -73,13 +73,15 @@ jobs:
       - run: npm test
       - name: Stage the release (approve it on npm with 2FA)
         working-directory: ${{ steps.which.outputs.dir }}
+        env:
+          VERSION: ${{ steps.which.outputs.version }}
         run: |
           # A version already on npm (the first ci-local-pi, published by hand
           # before its trusted publisher could exist) is left alone: the tag
           # then only makes its GitHub release.
           name="$(node -p 'require("./package.json").name')"
-          if [ -n "$(npm view "$name@${{ steps.which.outputs.version }}" version 2>/dev/null)" ]; then
-            echo "::notice::$name ${{ steps.which.outputs.version }} is already on npm: not staged again"
+          if [ -n "$(npm view "$name@$VERSION" version 2>/dev/null)" ]; then
+            echo "::notice::$name $VERSION is already on npm: not staged again"
             exit 0
           fi
           npm stage --help >/dev/null 2>&1 || { echo "::error::npm $(npm -v) has no npm stage"; exit 1; }
