@@ -91,8 +91,9 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
   let runActive = false
   // The runs ci_local_run started, by pid, until their run shows in the events
   // file (seen) or they end. One that ends unseen, after the tool returned,
-  // gets an end card of its own (exitCard): no event will ever name it.
-  type Launch = ReturnType<typeof launchRun> & { seen: boolean; waiting: boolean }
+  // gets an end card of its own (exitCard): no event will ever name it. Each
+  // belongs to the session that started it; another session drops it.
+  type Launch = ReturnType<typeof launchRun> & { seen: boolean; waiting: boolean; sessionId: string }
   const launches = new Map<number, Launch>()
 
   pi.on('agent_start', async () => {
@@ -166,8 +167,9 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const found = findProject(ctx.cwd)
       if (!found) throw new Error(`no ci-local.config.sh with a literal CI_PROJECT at or above ${ctx.cwd}`)
-      const launch = launchRun({ repo: found.repo, args: params.args ?? [], sessionId: ctx.sessionManager.getSessionId() })
-      const tracked: Launch = Object.assign(launch, { seen: false, waiting: true })
+      const sessionId = ctx.sessionManager.getSessionId()
+      const launch = launchRun({ repo: found.repo, args: params.args ?? [], sessionId })
+      const tracked: Launch = Object.assign(launch, { seen: false, waiting: true, sessionId })
       if (launch.pid !== undefined) launches.set(launch.pid, tracked)
       const result = await waitForStart(launch, eventsFileFor(found.project, process.env, found.repo), { timeoutMs: launchWaitMs, signal })
       tracked.waiting = false
@@ -179,6 +181,13 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
       return { content: [{ type: 'text', text: launchReport(result, launch, found.project) }], details: { kind: result.kind, pid: launch.pid } }
     },
   })
+
+  /** Launches of an earlier session are that session's: not this one's to report. */
+  function dropLaunchesOfOtherSessions(sessionId: string) {
+    for (const [pid, launch] of launches) {
+      if (launch.sessionId !== sessionId) launches.delete(pid)
+    }
+  }
 
   function stop() {
     if (timer) clearInterval(timer)
@@ -207,6 +216,7 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     // Whether each run seen in flight is this session's own (decided once: by the
     // session the run names, else by its process ancestry; see ownsRun).
     const sessionId = ctx.sessionManager.getSessionId()
+    dropLaunchesOfOtherSessions(sessionId)
     const owned = new Map<string, boolean>()
     const isOwn = (run: NonNullable<ReturnType<typeof readRun>>) => {
       if (!owned.has(run.key)) owned.set(run.key, ownsRun(run, { sessionId }))
@@ -259,8 +269,7 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     const settleLaunches = (run: ReturnType<typeof readRun>) => {
       for (const [pid, launch] of launches) {
         if (run?.state.pid === pid) launch.seen = true
-        const ended = !launch.waiting && launch.code !== undefined
-        if (!ended) continue
+        if (launch.waiting || !launch.ended) continue
         launches.delete(pid)
         if (launch.seen) continue
         const card = exitCard(launch)

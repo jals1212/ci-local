@@ -518,14 +518,15 @@ export function ciLocalBin(repo) {
  * Starts ci-local in `repo` with `args`, detached (its own process group, no
  * terminal, nothing Pi waits on), naming the session in PI_SESSION_ID so the
  * run is this session's (ownsRun). Its stdout and stderr go to a private file
- * (`output`). `exited` settles with its exit status (a signal name when one
- * killed it), or null with `error` set when it could not start at all.
+ * (`output`). Once it ends, `ended` is true, with its exit status in `code`
+ * or the signal that killed it in `signal`; when it could not start at all,
+ * `error` says why and both are null. `exited` settles then.
  */
 export function launchRun({ repo, args = [], sessionId, env = process.env, bin = ciLocalBin(repo) }) {
   pruneLaunchOutputs()
   const dir = mkdtempSync(join(tmpdir(), LAUNCH_PREFIX))
   const output = join(dir, 'output.log')
-  const launch = { bin, output, pid: undefined, code: undefined, error: undefined, exited: undefined }
+  const launch = { bin, output, pid: undefined, ended: false, code: null, signal: null, error: undefined, exited: undefined }
   let child
   try {
     const fd = openSync(output, 'a', 0o600)
@@ -542,12 +543,12 @@ export function launchRun({ repo, args = [], sessionId, env = process.env, bin =
   launch.exited = new Promise((resolve) => {
     child.once('error', (error) => {
       launch.error = error.message
-      launch.code = null
-      resolve(null)
+      launch.ended = true
+      resolve(launch)
     })
     child.once('exit', (code, signal) => {
-      launch.code = code ?? signal
-      resolve(launch.code)
+      Object.assign(launch, { code, signal, ended: true })
+      resolve(launch)
     })
   })
   child.unref()
@@ -571,7 +572,7 @@ export async function waitForStart(launch, file, { timeoutMs = LAUNCH_WAIT_MS, p
     // Snapshot "has it exited?" first, then read the events. A run that wrote
     // its events and exited in between is then found by its events (started),
     // never taken for one that exited before writing any.
-    const ended = launch.code !== undefined
+    const ended = launch.ended
     let run = null
     try {
       run = file ? readRun(file) : null
@@ -607,6 +608,16 @@ export function outputTail(output, count = 20) {
   }
 }
 
+/** How a launch ended, in a few words: `status 2`, or `killed by SIGTERM`. */
+const howEnded = ({ code, signal }) => (signal ? `killed by ${signal}` : `status ${code}`)
+
+/** The first line of ci_local_run's answer for a launch that ended before its run showed. */
+function endedLine(launch) {
+  if (launch.code === 0) return 'ci-local finished (status 0) without a run'
+  const verb = launch.signal ? 'was' : 'exited with'
+  return `ci-local ${verb} ${howEnded(launch)} before a run started`
+}
+
 /** What ci_local_run tells the agent of a launch and how it stands. */
 export function launchReport(result, launch, project) {
   const where = `Output: ${launch.output}.`
@@ -616,9 +627,8 @@ export function launchReport(result, launch, project) {
   if (result.kind === 'waiting')
     return `ci-local launched (pid ${launch.pid}) for ${project}, no event yet: another run of ${project} may hold its events file until it ends. ${follow} ${where}`
   const tail = outputTail(launch.output)
-  const ended = launch.code === 0 ? 'ci-local finished (status 0) without a run' : `ci-local exited with status ${launch.code} before a run started`
   return [
-    `${ended}. ${where}`,
+    `${endedLine(launch)}. ${where}`,
     ...(tail.length ? ['', '```', ...tail, '```'] : []),
   ].join('\n')
 }
@@ -630,7 +640,7 @@ export function launchReport(result, launch, project) {
  * (createDelivery): failed, with the end of its output, which says what
  * happened either way.
  */
-export function exitCard({ pid, code, output, tail = outputTail(output, 10) }) {
+export function exitCard({ pid, code, signal = null, output, tail = outputTail(output, 10) }) {
   // Status 0: its run passed, or it had no run to make; anything else failed.
   const state = code === 0 ? 'passed' : 'failed'
   return {
@@ -640,7 +650,7 @@ export function exitCard({ pid, code, output, tail = outputTail(output, 10) }) {
       code: code === 0 ? 0 : 1,
       lines: [
         `> ${BRAND} ${GLYPHS[state]} **ci-local** · ended before this session saw its run`,
-        `> status ${code} · pid ${pid} · output \`${output}\``,
+        `> ${howEnded({ code, signal })} · pid ${pid} · output \`${output}\``,
         ...tail.map((line) => `> ${line}`),
       ],
     },
