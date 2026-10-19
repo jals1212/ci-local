@@ -24,6 +24,11 @@
 //   in a run gets it steered in; busy without a run (compacting), it waits. A
 //   failed delivery is tried again, never dropped.
 // - Tool `ci_local_status`: the same three lines, for the agent, without bash.
+// - Tool `ci_local_run`: starts the repository's own ci-local detached, named
+//   for this session, and returns once it is queued or started (or with its
+//   output when it ends first). No background job, so no job notice: the
+//   footer and the end card report the run. One that ends later before any
+//   event gets an end card of its own.
 //
 // It reads the events file each run writes (see README, "Following a run");
 // it never runs ci-local or Docker. The logic lives in ./core.js.
@@ -34,6 +39,7 @@ import { Box, Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 
 import {
+  LAUNCH_WAIT_MS,
   WAKE_TEXT,
   cardContent,
   createDelivery,
@@ -41,9 +47,13 @@ import {
   createTracker,
   deliveryOptions,
   eventsFileFor,
+  exitCard,
   findProject,
+  launchReport,
+  launchRun,
   ownsRun,
   readRun,
+  waitForStart,
 } from './core.js'
 
 const KEY = 'ci-local'
@@ -63,11 +73,12 @@ type Card = { state: string; lines: string[] }
 /** A start card: the run, its stage ('starting', then 'started'), the --status block. */
 type StartCard = { key: string; phase: 'starting' | 'started'; lines: string[] }
 
-export function createCiLocalExtension() {
-  return (pi: ExtensionAPI) => ciLocal(pi)
+/** launchWaitMs: how long ci_local_run waits for the run's first event (LAUNCH_WAIT_MS). */
+export function createCiLocalExtension({ launchWaitMs = LAUNCH_WAIT_MS }: { launchWaitMs?: number } = {}) {
+  return (pi: ExtensionAPI) => ciLocal(pi, { launchWaitMs })
 }
 
-function ciLocal(pi: ExtensionAPI) {
+function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
   // Said at load, before any session starts, so a CLI 0.7.x bridge can see it
   // whatever the load order; session_shutdown takes it back (a reload without
   // this package must not find it still there).
@@ -78,6 +89,11 @@ function ciLocal(pi: ExtensionAPI) {
   // agent_start to agent_settled (in-run compaction and retries included).
   let delivery: ReturnType<typeof createDelivery> | undefined
   let runActive = false
+  // The runs ci_local_run started, by pid, until their run shows in the events
+  // file (seen) or they end. One that ends unseen, after the tool returned,
+  // gets an end card of its own (exitCard): no event will ever name it.
+  type Launch = ReturnType<typeof launchRun> & { seen: boolean; waiting: boolean }
+  const launches = new Map<number, Launch>()
 
   pi.on('agent_start', async () => {
     runActive = true
@@ -134,6 +150,36 @@ function ciLocal(pi: ExtensionAPI) {
     },
   })
 
+  pi.registerTool({
+    name: 'ci_local_run',
+    label: 'ci-local run',
+    description:
+      "Start this repository's ci-local (its own node_modules/.bin/ci-local, else the one on PATH) detached, with optional arguments " +
+      '(e.g. ["--only", "lint"]; never --live), and return once it is queued or started. ' +
+      'Use it instead of bash or bash_background: no job notice, the footer follows the run and its end card ' +
+      'reaches you when it ends. Do not poll, sleep or start a second run to check it. ' +
+      'Commands that end at once (--list, --print-plan, --down) return their output.',
+    promptSnippet: 'ci_local_run: start a ci-local run of this repository; its end card reaches you when it ends',
+    parameters: Type.Object({
+      args: Type.Optional(Type.Array(Type.String(), { description: 'ci-local arguments, one per item' })),
+    }),
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      const found = findProject(ctx.cwd)
+      if (!found) throw new Error(`no ci-local.config.sh with a literal CI_PROJECT at or above ${ctx.cwd}`)
+      const launch = launchRun({ repo: found.repo, args: params.args ?? [], sessionId: ctx.sessionManager.getSessionId() })
+      const tracked: Launch = Object.assign(launch, { seen: false, waiting: true })
+      if (launch.pid !== undefined) launches.set(launch.pid, tracked)
+      const result = await waitForStart(launch, eventsFileFor(found.project, process.env, found.repo), { timeoutMs: launchWaitMs, signal })
+      tracked.waiting = false
+      if (result.kind === 'started') tracked.seen = true
+      if (result.kind === 'exited') {
+        if (launch.pid !== undefined) launches.delete(launch.pid)
+        if (launch.error) throw new Error(`cannot start ${launch.bin}: ${launch.error}`)
+      }
+      return { content: [{ type: 'text', text: launchReport(result, launch, found.project) }], details: { kind: result.kind, pid: launch.pid } }
+    },
+  })
+
   function stop() {
     if (timer) clearInterval(timer)
     timer = undefined
@@ -181,6 +227,7 @@ function ciLocal(pi: ExtensionAPI) {
       }
       const { footer, changed } = statusLine.update(run)
       if (changed) ctx.ui.setStatus(KEY, footer)
+      settleLaunches(run)
       // Only this session's own runs get cards and reach the agent, as Gentle
       // AI's job notices go only to the session that started the job. Another
       // session's run in this repository shows in the status line alone. What
@@ -204,6 +251,22 @@ function ciLocal(pi: ExtensionAPI) {
         }
       }
       deliver()
+    }
+
+    // The launches of ci_local_run: one whose run shows in the events is
+    // followed like any run; one that ended without its run ever showing here
+    // gets an end card of its own (exitCard), as no event will name it.
+    const settleLaunches = (run: ReturnType<typeof readRun>) => {
+      for (const [pid, launch] of launches) {
+        if (run?.state.pid === pid) launch.seen = true
+        const ended = !launch.waiting && launch.code !== undefined
+        if (!ended) continue
+        launches.delete(pid)
+        if (launch.seen) continue
+        const card = exitCard(launch)
+        ctx.ui.notify(`ci-local ended before this session saw its run · ${found.project}`, card.state.state === 'passed' ? 'info' : 'error')
+        ends.ended(card)
+      }
     }
 
     // At most one delivery per tick: a failure is retried later (see createDelivery).

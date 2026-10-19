@@ -2,8 +2,24 @@
 // follows, the footer line, and when a run it watched has ended. The
 // rendering and the states are those of `ci-local --status` (status.js).
 
-import { spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 
 import { BRAND, GLYPHS, alive, duration, lastRun, render, runState } from '@jals1212/ci-local/status'
@@ -268,32 +284,34 @@ export function createStatusLine({ file, sessionId, reason }) {
   }
 }
 
-/** One short line for the footer. */
+/** One short line for the footer: `🚦 ci-local ✓ passed · 4m12s`. */
 export function footerText(state) {
+  // The state's glyph sits by the state, after the name.
+  return `${BRAND} ci-local ${GLYPHS[state.state] ?? GLYPHS.stopped} ${stateText(state)}`
+}
+
+/** The state of a run in a few words, as the footer says it after its glyph. */
+export function stateText(state) {
   const time = duration(state.elapsedMs)
-  // The state's glyph sits by the state, after the name: `🚦 ci-local ✓ passed`.
-  const head = (glyph) => `${BRAND} ci-local ${glyph}`
   switch (state.state) {
     case 'running':
-      return state.step
-        ? `${head(GLYPHS.running)} [${state.step.index}/${state.step.total}] ${state.step.step} · ${time}`
-        : `${head(GLYPHS.running)} running · ${time}`
+      return state.step ? `[${state.step.index}/${state.step.total}] ${state.step.step} · ${time}` : `running · ${time}`
     case 'starting':
-      return `${head(GLYPHS.starting)} starting · ${time}`
+      return `starting · ${time}`
     case 'queued': {
       // blockedBy names the run at the head of the queue (the one running), the
       // same for every run waiting: how many are ahead tells them apart.
-      const queued = `${head(GLYPHS.queued)} queued`
       const running = state.blockedBy?.project ? `${state.blockedBy.project} running` : ''
-      if (state.ahead > 0) return `${queued} · ${state.ahead} ahead${running ? ` (${running})` : ''}`
-      return running ? `${queued} · ${running}` : queued
+      if (!(state.ahead > 0)) return running ? `queued · ${running}` : 'queued'
+      const ahead = `queued · ${state.ahead} ahead`
+      return running ? `${ahead} (${running})` : ahead
     }
     case 'passed':
-      return `${head(GLYPHS.passed)} passed · ${time}`
+      return `passed · ${time}`
     case 'failed':
-      return state.fail ? `${head(GLYPHS.failed)} failed at ${state.fail.step} · ${time}` : `${head(GLYPHS.failed)} failed · ${time}`
+      return state.fail ? `failed at ${state.fail.step} · ${time}` : `failed · ${time}`
     default:
-      return `${head(GLYPHS.stopped)} stopped`
+      return 'stopped'
   }
 }
 
@@ -451,6 +469,180 @@ export function createDelivery({ isAlive = alive, now = Date.now } = {}) {
     boundary() {
       failures = 0
       retryAt = 0
+    },
+  }
+}
+
+// ---------------------------------------------------------------- ci_local_run
+//
+// The ci_local_run tool starts a run itself, detached from Pi's tools, so no
+// background job announces its end: the footer follows it and the end card
+// (with its wake) reports it, as for any run this session starts. A run that
+// ends before its first event (a usage or config error, `--list`, a busy
+// machine with --no-wait) leaves no card: the tool reports it when it ends
+// while the tool waits, exitCard when it ends later.
+
+/** The directories of launch outputs, in the temporary directory. */
+const LAUNCH_PREFIX = 'ci-local-run-'
+
+/** How long a launch's output is kept: past it, the next launch removes it. */
+export const LAUNCH_OUTPUT_TTL_MS = 7 * 24 * 3600 * 1000
+
+/** Removes the launch outputs in `dir` older than `maxAgeMs`; never fails. */
+export function pruneLaunchOutputs({ dir = tmpdir(), maxAgeMs = LAUNCH_OUTPUT_TTL_MS, now = Date.now() } = {}) {
+  let names = []
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    if (!name.startsWith(LAUNCH_PREFIX)) continue
+    const path = join(dir, name)
+    try {
+      const stat = lstatSync(path)
+      if (stat.isDirectory() && now - stat.mtimeMs > maxAgeMs) rmSync(path, { recursive: true, force: true })
+    } catch {
+      // Gone already, or not ours to remove: left alone.
+    }
+  }
+}
+
+/** The ci-local a repository runs: its own (node_modules/.bin), else the one on PATH. */
+export function ciLocalBin(repo) {
+  const local = join(repo, 'node_modules', '.bin', 'ci-local')
+  return existsSync(local) ? local : 'ci-local'
+}
+
+/**
+ * Starts ci-local in `repo` with `args`, detached (its own process group, no
+ * terminal, nothing Pi waits on), naming the session in PI_SESSION_ID so the
+ * run is this session's (ownsRun). Its stdout and stderr go to a private file
+ * (`output`). `exited` settles with its exit status (a signal name when one
+ * killed it), or null with `error` set when it could not start at all.
+ */
+export function launchRun({ repo, args = [], sessionId, env = process.env, bin = ciLocalBin(repo) }) {
+  pruneLaunchOutputs()
+  const dir = mkdtempSync(join(tmpdir(), LAUNCH_PREFIX))
+  const output = join(dir, 'output.log')
+  const launch = { bin, output, pid: undefined, code: undefined, error: undefined, exited: undefined }
+  let child
+  try {
+    const fd = openSync(output, 'a', 0o600)
+    try {
+      child = spawn(bin, args, { cwd: repo, detached: true, stdio: ['ignore', fd, fd], env: { ...env, PI_SESSION_ID: sessionId } })
+    } finally {
+      closeSync(fd) // the child has its own copy
+    }
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true }) // nothing ran: no output to keep
+    throw error
+  }
+  launch.pid = child.pid
+  launch.exited = new Promise((resolve) => {
+    child.once('error', (error) => {
+      launch.error = error.message
+      launch.code = null
+      resolve(null)
+    })
+    child.once('exit', (code, signal) => {
+      launch.code = code ?? signal
+      resolve(launch.code)
+    })
+  })
+  child.unref()
+  return launch
+}
+
+/** How long ci_local_run waits for the run's first event. */
+export const LAUNCH_WAIT_MS = 15_000
+
+/**
+ * Waits until the launched run shows in the events file (its pid in the last
+ * run: `started`, with the run), ends first (`exited`), or `timeoutMs` passes
+ * or `signal` aborts (`waiting`: a run of the same project may still own the
+ * events file, and this one writes nothing before its turn). The run itself
+ * is never stopped here.
+ */
+export async function waitForStart(launch, file, { timeoutMs = LAUNCH_WAIT_MS, pollMs = 250, signal } = {}) {
+  const deadline = Date.now() + timeoutMs
+  const aborted = new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))
+  for (;;) {
+    // Snapshot "has it exited?" first, then read the events. A run that wrote
+    // its events and exited in between is then found by its events (started),
+    // never taken for one that exited before writing any.
+    const ended = launch.code !== undefined
+    let run = null
+    try {
+      run = file ? readRun(file) : null
+    } catch {
+      // A half-written file: the next look reads it whole.
+    }
+    if (run && launch.pid !== undefined && run.state.pid === launch.pid) return { kind: 'started', run }
+    if (ended) return { kind: 'exited' }
+    if (Date.now() >= deadline || signal?.aborted) return { kind: 'waiting' }
+    await Promise.race([launch.exited, aborted, new Promise((resolve) => setTimeout(resolve, pollMs))])
+  }
+}
+
+/** How much of the end of a launch's output outputTail reads. */
+const TAIL_BYTES = 64 * 1024
+
+/** The last `count` lines of a launch's output, from its last TAIL_BYTES (none when it cannot be read). */
+export function outputTail(output, count = 20) {
+  let fd
+  try {
+    fd = openSync(output, 'r')
+    const size = fstatSync(fd).size
+    const length = Math.min(size, TAIL_BYTES)
+    const buffer = Buffer.alloc(length)
+    readSync(fd, buffer, 0, length, size - length)
+    const lines = buffer.toString('utf8').trimEnd().split('\n')
+    if (length < size) lines.shift() // cut mid-line
+    return lines.slice(-count)
+  } catch {
+    return []
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
+/** What ci_local_run tells the agent of a launch and how it stands. */
+export function launchReport(result, launch, project) {
+  const where = `Output: ${launch.output}.`
+  const follow = 'The footer follows it and its end card reaches you when it ends: do not poll, sleep or run `ci-local --status`.'
+  if (result.kind === 'started')
+    return `ci-local started (pid ${launch.pid}) for ${project}: ${stateText(result.run.state)}. ${follow} ${where}`
+  if (result.kind === 'waiting')
+    return `ci-local launched (pid ${launch.pid}) for ${project}, no event yet: another run of ${project} may hold its events file until it ends. ${follow} ${where}`
+  const tail = outputTail(launch.output)
+  const ended = launch.code === 0 ? 'ci-local finished (status 0) without a run' : `ci-local exited with status ${launch.code} before a run started`
+  return [
+    `${ended}. ${where}`,
+    ...(tail.length ? ['', '```', ...tail, '```'] : []),
+  ].join('\n')
+}
+
+/**
+ * A launch that ended after ci_local_run returned without the session ever
+ * seeing its run (it wrote no event, or one the session never read before a
+ * later run took the events file), as a run for the end card
+ * (createDelivery): failed, with the end of its output, which says what
+ * happened either way.
+ */
+export function exitCard({ pid, code, output, tail = outputTail(output, 10) }) {
+  // Status 0: its run passed, or it had no run to make; anything else failed.
+  const state = code === 0 ? 'passed' : 'failed'
+  return {
+    key: `launch:${pid}`,
+    state: { state, pid, pidStart: null },
+    block: {
+      code: code === 0 ? 0 : 1,
+      lines: [
+        `> ${BRAND} ${GLYPHS[state]} **ci-local** · ended before this session saw its run`,
+        `> status ${code} · pid ${pid} · output \`${output}\``,
+        ...tail.map((line) => `> ${line}`),
+      ],
     },
   }
 }

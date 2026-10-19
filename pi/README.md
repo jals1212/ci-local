@@ -73,9 +73,24 @@ runs ci-local or Docker itself:
   session starts is not announced.
 - **Tool `ci_local_status`**: the same three lines for the agent, without a
   shell.
-- **Skill `ci-local`**: how an agent runs and waits for ci-local (in the
-  background (quiet without a terminal), never two runs, read only the failing
-  step's log).
+- **Tool `ci_local_run`**: starts the repository's own ci-local
+  (`node_modules/.bin/ci-local`, else the one on `PATH`) with optional
+  arguments (`args`), detached from Pi: its own process group, no terminal,
+  stdout and stderr in a private file it names (under `$TMPDIR`, removed by a
+  launch a week later). The run records the
+  session's `PI_SESSION_ID`, so it is the session's own. The tool returns
+  once the run is queued or started (up to 15 seconds: a run of the same
+  project that still holds the events file keeps a new one silent until its
+  turn), or with its output when it ends first (`--list`, `--print-plan`, a
+  usage or config error, a busy machine with `--no-wait`). There is no
+  background job, so no job notice: the footer and the end card report the
+  run, and the hidden wake reaches an idle agent. A launch that ends after
+  the tool returned without the session ever seeing its run (no event, or
+  one replaced before the session read it) gets a failed end card with the
+  end of its output.
+- **Skill `ci-local`**: how an agent runs and waits for ci-local (with
+  `ci_local_run`, else in the background, quiet without a terminal; never two
+  runs; read only the failing step's log).
   Branch and merge policy stay the project's.
 
 The extension follows the file ci-local would write: `CI_LOCAL_EVENTS` from

@@ -5,7 +5,7 @@ const stubs = {
   '@earendil-works/pi-tui':
     'export class Box { constructor(...args) { this.args = args; this.children = [] } addChild(child) { this.children.push(child) } }\n' +
     'export class Text { constructor(text) { this.text = text } }\n',
-  typebox: 'export const Type = { Object: () => ({}) }\n',
+  typebox: 'export const Type = { Object: () => ({}), Optional: (t) => t, Array: () => ({}), String: () => ({}) }\n',
 }
 
 export async function resolve(specifier, context, next) {

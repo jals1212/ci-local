@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { mock, test } from 'node:test'
 
 import { CARD_GRACE_MS, WAKE_TEXT } from '../extensions/core.js'
+import { fakeCiLocal } from './fixture/fake-ci-local.js'
 
 const canRunTs = Boolean(process.features?.typescript)
 
@@ -333,6 +334,83 @@ test('the ci_local_status tool says the three lines of the last run, or why ther
     if (saved === undefined) delete process.env.CI_LOCAL_EVENTS
     else process.env.CI_LOCAL_EVENTS = saved
   }
+})
+
+/** A repository whose own ci-local (node_modules/.bin) runs `script`, a bash body. */
+function launchRepo(project, script) {
+  const { repo, file } = glueRepo(project)
+  fakeCiLocal(repo, script)
+  return { repo, file }
+}
+
+/** Waits, in real time (the timers are mocked), until `check()` is true. */
+async function until(check, ms = 5000) {
+  const deadline = performance.now() + ms
+  while (!check()) {
+    if (performance.now() > deadline) assert.fail('timed out')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+test('ci_local_run starts the run detached, as this session\'s: the tool says it is queued, the footer and a start card follow it', TS, async () => {
+  const extension = await loadExtension()
+  const { repo, file } = launchRepo(
+    'glue-ci',
+    `printf '{"ts":"%s","event":"queued","project":"glue-ci","pid":%s,"session":"%s","ahead":1,"blockedBy":{"project":"other-ci","pid":1}}\\n' "$(date -u +%FT%TZ)" $$ "$PI_SESSION_ID" >"$CI_LOCAL_EVENTS"; exec sleep 30`
+  )
+  await withPolling(file, async (tick) => {
+    const me = await openSession(extension, { repo, sessionId: 'me' })
+    const result = await me.pi.tools.ci_local_run.execute('call-1', { args: ['--only', 'lint'] }, undefined, undefined, me.ctx)
+    try {
+      assert.equal(result.details.kind, 'started')
+      assert.match(result.content[0].text, /^ci-local started \(pid \d+\) for glue-ci: queued · 1 ahead \(other-ci running\)\./)
+      tick()
+      assert.match(me.statuses.at(-1), /ci-local ◌ queued · 1 ahead \(other-ci running\)/)
+      assert.deepEqual(me.pi.entries.map(({ data }) => data.phase), ['starting'], 'its own run: a start card')
+      assert.deepEqual(wakes(me), [])
+    } finally {
+      process.kill(result.details.pid)
+    }
+  })
+})
+
+test('ci_local_run: a launch that ends before any event, after the tool returned, gets a failed card and a wake', TS, async () => {
+  const { createCiLocalExtension } = await import('../extensions/ci-local.ts')
+  const extension = createCiLocalExtension({ launchWaitMs: 0 })
+  const { repo, file } = launchRepo('glue-ci', 'sleep 0.3; echo "ci-local: the config is broken" >&2; exit 2')
+  await withPolling(file, async (tick) => {
+    const me = await openSession(extension, { repo, sessionId: 'me' })
+    const result = await me.pi.tools.ci_local_run.execute('call-1', {}, undefined, undefined, me.ctx)
+    assert.equal(result.details.kind, 'waiting')
+    assert.match(result.content[0].text, /no event yet/)
+    await until(() => spawnSync('kill', ['-0', String(result.details.pid)]).status !== 0)
+    tick()
+    assert.deepEqual(me.notices, [{ message: 'ci-local ended before this session saw its run · glue-ci', level: 'error' }])
+    assert.equal(cards(me).length, 1)
+    const card = cards(me)[0]
+    assert.equal(card.message.details.state, 'failed')
+    assert.match(card.message.details.lines[0], /ended before this session saw its run/)
+    assert.ok(card.message.details.lines.includes('> ci-local: the config is broken'))
+    assert.deepEqual(card.options, { triggerTurn: false }, 'an idle agent: stored')
+    tick(3)
+    assert.equal(wakes(me).length, 1, 'then one wake')
+    tick(5)
+    assert.equal(cards(me).length, 1, 'never twice')
+  })
+})
+
+test('ci_local_run: an exit while the tool waits is its result, with the output, and no card', TS, async () => {
+  const extension = await loadExtension()
+  const { repo, file } = launchRepo('glue-ci', 'echo "ci-local: unknown option --nope" >&2; exit 2')
+  await withPolling(file, async (tick) => {
+    const me = await openSession(extension, { repo, sessionId: 'me' })
+    const result = await me.pi.tools.ci_local_run.execute('call-1', { args: ['--nope'] }, undefined, undefined, me.ctx)
+    assert.equal(result.details.kind, 'exited')
+    assert.match(result.content[0].text, /^ci-local exited with status 2 before a run started[\s\S]*unknown option --nope/)
+    tick(5)
+    assert.deepEqual(cards(me), [])
+    assert.deepEqual(me.notices, [])
+  })
 })
 
 /** Runs `body` as a process where the package has not loaded (it leaves its flag when it does). */
