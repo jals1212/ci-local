@@ -401,7 +401,7 @@ step_log() {
 
 # The plan as JSON, for parity checks: `@jals1212/ci-local/parity`.
 print_plan() {
-  local i fn
+  local i fn name sep=''
   printf '{"version":%s,"project":%s,"workflow":%s,"jobs":' \
     "$(json_string "$CI_LOCAL_VERSION")" "$(json_string "$CI_PROJECT")" "$(json_string "$CI_WORKFLOW")"
   json_array "${CI_JOBS[@]}"
@@ -440,6 +440,14 @@ print_plan() {
   for i in ${CONFIG_FUNCTIONS[@]+"${!CONFIG_FUNCTIONS[@]}"}; do
     [[ $i -eq 0 ]] || printf ','
     printf '%s:%s' "$(json_string "${CONFIG_FUNCTIONS[$i]}")" "$(json_string "$(declare -f "${CONFIG_FUNCTIONS[$i]}")")"
+  done
+  # The compose variables host steps inherit (exported only, as compose sees
+  # them), so a check reads the compose files a bare `docker compose up` does.
+  printf '},"composeEnv":{'
+  for name in COMPOSE_FILE COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR; do
+    printenv "$name" >/dev/null || continue
+    printf '%s%s:%s' "$sep" "$(json_string "$name")" "$(json_string "$(printenv "$name")")"
+    sep=,
   done
   printf '}}\n'
 }

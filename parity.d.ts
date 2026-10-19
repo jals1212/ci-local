@@ -29,6 +29,11 @@ export interface Plan {
   steps: PlanStep[]
   /** Every function the config defines, name to `declare -f` source (absent from plans of older versions). */
   functions?: Record<string, string>
+  /**
+   * COMPOSE_FILE, COMPOSE_PROFILES and COMPOSE_PATH_SEPARATOR, those exported
+   * when the plan was printed (absent from plans of older versions).
+   */
+  composeEnv?: Partial<Record<'COMPOSE_FILE' | 'COMPOSE_PROFILES' | 'COMPOSE_PATH_SEPARATOR', string>>
 }
 
 export interface Workflow {

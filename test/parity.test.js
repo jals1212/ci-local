@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
@@ -175,7 +175,10 @@ test('a port published in a function the host step calls is found', () => {
 
 const composeProject = (files) => {
   const dir = mkdtempSync(join(tmpdir(), 'ci-local-compose-'))
-  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content)
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true })
+    writeFileSync(join(dir, name), content)
+  }
   return dir
 }
 
@@ -210,6 +213,172 @@ test('a compose file without ports, or a compose command that starts nothing, is
   })
   assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose -f compose.ci.yml up -d; }'), { cwd }), [])
   assert.deepEqual(publishedPortProblems(hostPlan('logs () { docker compose logs db; }'), { cwd }), [])
+})
+
+// The dossier stack (#41): files from COMPOSE_FILE, an override that resets
+// every port, host-network services behind a profile nobody enables.
+const DOSSIER_BASE = `services:
+  postgres:
+    image: postgres:17
+    ports: ["5432:5432"]
+  minio:
+    image: minio/minio
+    ports: ["9000:9000", "9001:9001"]
+  clamav:
+    image: clamav/clamav
+    ports: ["3310:3310"]
+  redis:
+    image: redis
+    ports: ["6379:6379"]
+  api:
+    image: api
+    profiles: [app]
+    network_mode: host
+    depends_on: [postgres]
+  worker:
+    image: worker
+    profiles: [app]
+    network_mode: host
+`
+const DOSSIER_OVERRIDE = `services:
+  postgres:
+    ports: !reset []
+  minio:
+    ports: !reset []
+  clamav:
+    ports: !reset []
+  redis:
+    ports: !reset []
+`
+const dossier = (extra = {}) =>
+  composeProject({ 'docker-compose.yml': DOSSIER_BASE, 'docker/ci-local/compose.override.yml': DOSSIER_OVERRIDE, ...extra })
+const COMPOSE_FILE = 'docker-compose.yml:docker/ci-local/compose.override.yml'
+
+test('with no -f the files come from COMPOSE_FILE, merged in order, and !reset clears the ports', () => {
+  const cwd = dossier()
+  const plan = hostPlan('up () { docker compose up -d --wait postgres minio clamav; }', { composeEnv: { COMPOSE_FILE } })
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [])
+  plan.composeEnv.COMPOSE_FILE = 'docker-compose.yml'
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [
+    'host step "Services": docker-compose.yml publishes ports of service "postgres"',
+    'host step "Services": docker-compose.yml publishes ports of service "minio"',
+    'host step "Services": docker-compose.yml publishes ports of service "clamav"',
+  ])
+})
+
+test('COMPOSE_PATH_SEPARATOR splits COMPOSE_FILE, and $REPO in it is resolved', () => {
+  const cwd = dossier()
+  const plan = hostPlan('up () { docker compose up -d postgres; }', {
+    composeEnv: { COMPOSE_FILE: '$REPO/docker-compose.yml;$REPO/docker/ci-local/compose.override.yml', COMPOSE_PATH_SEPARATOR: ';' },
+  })
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [])
+})
+
+test('-f files are merged in order: a later !reset or !override replaces, a plain list adds', () => {
+  const cwd = dossier({
+    'more.yml': 'services:\n  redis:\n    ports: ["6380:6379"]\n',
+    'replace.yml': 'services:\n  redis:\n    ports: !override ["6381:6379"]\n  api: !reset {}\n',
+  })
+  const up = (files) => publishedPortProblems(hostPlan(`up () { docker compose ${files} up -d; }`), { cwd })
+  assert.deepEqual(up('-f docker-compose.yml -f docker/ci-local/compose.override.yml'), [])
+  assert.deepEqual(up('-f docker-compose.yml -f docker/ci-local/compose.override.yml -f more.yml'), [
+    'host step "Services": more.yml publishes ports of service "redis"',
+  ])
+  assert.deepEqual(up('-f docker-compose.yml -f replace.yml --profile app'), [
+    'host step "Services": docker-compose.yml publishes ports of service "postgres"',
+    'host step "Services": docker-compose.yml publishes ports of service "minio"',
+    'host step "Services": docker-compose.yml publishes ports of service "clamav"',
+    'host step "Services": replace.yml publishes ports of service "redis"',
+    'host step "Services": docker-compose.yml puts service "worker" on the host network',
+  ])
+})
+
+test('a service behind a profile counts only when the profile is enabled', () => {
+  const cwd = dossier()
+  const problems = (source, composeEnv = { COMPOSE_FILE }) =>
+    publishedPortProblems(hostPlan(source, { composeEnv }), { cwd })
+  const hostNetwork = [
+    'host step "Services": docker-compose.yml puts service "api" on the host network',
+    'host step "Services": docker-compose.yml puts service "worker" on the host network',
+  ]
+  assert.deepEqual(problems('up () { docker compose up -d; }'), [])
+  assert.deepEqual(problems('up () { docker compose --profile app up -d; }'), hostNetwork)
+  assert.deepEqual(problems('up () { docker compose --profile="*" up -d; }'), hostNetwork)
+  assert.deepEqual(problems('up () { docker compose up -d; }', { COMPOSE_FILE, COMPOSE_PROFILES: 'other,app' }), hostNetwork)
+})
+
+test('COMPOSE_FILE and COMPOSE_PROFILES are read from .env too, below the environment', () => {
+  const cwd = dossier({ '.env': `# compose\nCOMPOSE_FILE=${COMPOSE_FILE}\nexport COMPOSE_PROFILES="app"\n` })
+  assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose up -d; }'), { cwd }), [
+    'host step "Services": docker-compose.yml puts service "api" on the host network',
+    'host step "Services": docker-compose.yml puts service "worker" on the host network',
+  ])
+  const plan = hostPlan('up () { docker compose up -d; }', { composeEnv: { COMPOSE_PROFILES: '' } })
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [])
+})
+
+test('a service named after up starts, whatever its profile, with what it depends on', () => {
+  const cwd = dossier({ 'docker/ci-local/compose.override.yml': 'services: {}\n' })
+  const plan = hostPlan('up () { docker compose up -d --scale redis=1 -t 5 api; }', { composeEnv: { COMPOSE_FILE } })
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [
+    'host step "Services": docker-compose.yml publishes ports of service "postgres"',
+    'host step "Services": docker-compose.yml puts service "api" on the host network',
+  ])
+})
+
+test('a service name that cannot be read counts every service', () => {
+  const cwd = dossier()
+  const plan = hostPlan('up () { docker compose up -d $SERVICES; }', { composeEnv: { COMPOSE_FILE } })
+  assert.equal(publishedPortProblems(plan, { cwd }).length, 2)
+})
+
+test('"$@" in the host step\'s own function is the arguments the step gives it', () => {
+  const cwd = dossier()
+  const source = 'start_stack () { docker compose up -d --wait "$@"; }'
+  const plan = hostPlan(source, { composeEnv: { COMPOSE_FILE } })
+  plan.steps[0].command = 'start_stack postgres minio clamav'
+  plan.steps[0].args = ['postgres', 'minio', 'clamav']
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [])
+  plan.steps[0].args = ['api']
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [
+    'host step "Services": docker-compose.yml puts service "api" on the host network',
+  ])
+})
+
+test('anchors, aliases and merge keys are followed, as compose follows them', () => {
+  const cwd = composeProject({
+    'compose.yaml': `x-ports: &ports ["80:80"]
+x-host: &host host
+x-base: &base
+  image: nginx
+  ports: ["81:81"]
+services:
+  web:
+    ports: *ports
+  net:
+    network_mode: *host
+  copy: *base
+  merged:
+    <<: *base
+  own:
+    <<: *base
+    ports: []
+`,
+  })
+  assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose up -d; }'), { cwd }), [
+    'host step "Services": compose.yaml publishes ports of service "web"',
+    'host step "Services": compose.yaml puts service "net" on the host network',
+    'host step "Services": compose.yaml publishes ports of service "copy"',
+    'host step "Services": compose.yaml publishes ports of service "merged"',
+  ])
+})
+
+test('compose run publishes the ports of what it depends on, not of its own service', () => {
+  const cwd = dossier({ 'docker/ci-local/compose.override.yml': 'services:\n  api:\n    network_mode: !reset null\n    ports: ["80:80"]\n' })
+  const plan = hostPlan('up () { docker compose run --rm -e X=1 api npm test; }', { composeEnv: { COMPOSE_FILE } })
+  assert.deepEqual(publishedPortProblems(plan, { cwd }), [
+    'host step "Services": docker-compose.yml publishes ports of service "postgres"',
+  ])
 })
 
 test('a compose file that cannot be read is a problem, not a pass', () => {
