@@ -271,24 +271,29 @@ export function createStatusLine({ file, sessionId, reason }) {
 /** One short line for the footer. */
 export function footerText(state) {
   const time = duration(state.elapsedMs)
+  // The state's glyph sits by the state, after the name: `🚦 ci-local ✓ passed`.
+  const head = (glyph) => `${BRAND} ci-local ${glyph}`
   switch (state.state) {
     case 'running':
       return state.step
-        ? `${BRAND} ${GLYPHS.running} ci-local [${state.step.index}/${state.step.total}] ${state.step.step} · ${time}`
-        : `${BRAND} ${GLYPHS.running} ci-local running · ${time}`
+        ? `${head(GLYPHS.running)} [${state.step.index}/${state.step.total}] ${state.step.step} · ${time}`
+        : `${head(GLYPHS.running)} running · ${time}`
     case 'starting':
-      return `${BRAND} ${GLYPHS.starting} ci-local starting · ${time}`
+      return `${head(GLYPHS.starting)} starting · ${time}`
     case 'queued': {
-      const behind = state.blockedBy?.project
-      const queued = `${BRAND} ${GLYPHS.queued} ci-local queued`
-      return behind ? `${queued} · behind ${behind}` : queued
+      // blockedBy names the run at the head of the queue (the one running), the
+      // same for every run waiting: how many are ahead tells them apart.
+      const queued = `${head(GLYPHS.queued)} queued`
+      const running = state.blockedBy?.project ? `${state.blockedBy.project} running` : ''
+      if (state.ahead > 0) return `${queued} · ${state.ahead} ahead${running ? ` (${running})` : ''}`
+      return running ? `${queued} · ${running}` : queued
     }
     case 'passed':
-      return `${BRAND} ${GLYPHS.passed} ci-local passed · ${time}`
+      return `${head(GLYPHS.passed)} passed · ${time}`
     case 'failed':
-      return state.fail ? `${BRAND} ${GLYPHS.failed} ci-local failed at ${state.fail.step} · ${time}` : `${BRAND} ${GLYPHS.failed} ci-local failed · ${time}`
+      return state.fail ? `${head(GLYPHS.failed)} failed at ${state.fail.step} · ${time}` : `${head(GLYPHS.failed)} failed · ${time}`
     default:
-      return `${BRAND} ${GLYPHS.stopped} ci-local stopped`
+      return `${head(GLYPHS.stopped)} stopped`
   }
 }
 

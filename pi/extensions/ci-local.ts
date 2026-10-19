@@ -1,9 +1,9 @@
 // Pi extension for @jals1212/ci-local: the state of this repository's
 // ci-local run in Pi's own UI, so neither the agent nor you write it by hand.
 //
-// - Status line: `🚦 ⧗ ci-local [3/8] lint · 2m05s`, `🚦 ◌ ci-local queued ·
-//   behind erp-ci`, then `🚦 ✓ ci-local passed · 4m12s` / `🚦 ✗ ci-local failed
-//   at lint` until the next run (🚦 is ci-local's own emoji, see BRAND).
+// - Status line: `🚦 ci-local ⧗ [3/8] lint · 2m05s`, `🚦 ci-local ◌ queued ·
+//   2 ahead (erp-ci running)`, then `🚦 ci-local ✓ passed · 4m12s` / `🚦 ci-local
+//   ✗ failed at lint` until the next run (🚦 is ci-local's own emoji, see BRAND).
 //   A run already over when a session starts is shown only if no session
 //   showed its result yet, like a message not yet delivered (createStatusLine).
 // - Cards and the agent: only for runs this session started, as Gentle AI's job
