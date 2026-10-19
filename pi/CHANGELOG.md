@@ -6,25 +6,31 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.2.0
+
 ### Added
 
-- Tool `ci_local_run`: starts the repository's own ci-local
-  (`node_modules/.bin`, else `PATH`) detached, named for the session, and
-  returns once the run is queued or started, or with its output when it ends
-  first (`--list`, a usage or config error). No background job, so no job
-  notice next to the end card. A launch that ends later without the session
-  ever seeing its run gets a failed end card with the end of its output.
-  Launch outputs live under `$TMPDIR` and are removed after a week. The skill starts
-  runs with it when present.
+- Tool `ci_local_run`: starts a run of the repository's own ci-local
+  (`node_modules/.bin`, else `PATH`) detached from Pi, for this session.
+  (#42, #43)
+  - It returns once the run is queued or started, or with ci-local's output
+    when it ends first (`--list`, a usage or config error, `--no-wait` on a
+    busy machine).
+  - No background job, so no job notice: the footer and the end card report
+    the run.
+  - A launch that ends after the tool returned, without the session ever
+    seeing its run, gets an end card of its own with the end of its output.
+  - Launch outputs live under `$TMPDIR` and are removed after a week.
+- Skill: starts runs with `ci_local_run` when present. (#42)
 
 ### Changed
 
 - Status line: the state's glyph sits by the state, after the name
-  (`🚦 ci-local ✓ passed · 4m12s`, was `🚦 ✓ ci-local passed`).
-- Status line: a queued run says how many runs are ahead of it
-  and which one is running (`🚦 ci-local ◌ queued · 2 ahead (erp-ci running)`,
-  was `behind erp-ci`): the run named is the one at the head of the queue, the
-  same for every run waiting, so two waiting sessions read alike before.
+  (`🚦 ci-local ✓ passed · 4m12s`, was `🚦 ✓ ci-local passed`). (#40)
+- Status line: a queued run says how many runs are ahead of it and which one
+  is running (`🚦 ci-local ◌ queued · 2 ahead (erp-ci running)`). It said
+  only `behind erp-ci`, the run at the head of the queue, so every waiting
+  session read the same. (#40)
 
 ## 0.1.1
 
