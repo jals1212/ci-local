@@ -400,9 +400,11 @@ function composeProblems(stepName, command, { cwd, project, composeEnv = {} }) {
   }
   const resolve = (file) =>
     file.replace(/\$\{REPO\}|\$REPO\b/g, cwd).replace(/\$\{CI_PROJECT\}|\$CI_PROJECT\b/g, project ?? '')
-  // The env files compose reads instead of `.env`, later ones winning.
+  // The env files compose reads instead of `.env`, later ones winning; an
+  // empty COMPOSE_ENV_FILES is unset.
   let envFiles = command.envFiles
-  if (envFiles.length === 0) envFiles = composeEnv.COMPOSE_ENV_FILES?.split(',').filter(Boolean) ?? ['.env']
+  if (envFiles.length === 0) envFiles = (composeEnv.COMPOSE_ENV_FILES ?? '').split(',').filter(Boolean)
+  if (envFiles.length === 0) envFiles = ['.env']
   const fromFiles = envFiles.map(resolve).map((path) => composeDotenv(isAbsolute(path) ? path : join(cwd, path)))
   const env = { ...Object.assign({}, ...fromFiles), ...composeEnv }
   let paths

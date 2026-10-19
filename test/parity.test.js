@@ -429,6 +429,7 @@ test('COMPOSE_ENV_FILES, or --env-file, replaces .env', () => {
   ]
   const problems = (source, composeEnv = {}) => publishedPortProblems(hostPlan(source, { composeEnv }), { cwd })
   assert.deepEqual(problems('up () { docker compose up -d; }', { COMPOSE_ENV_FILES: 'ci.env' }), [])
+  assert.deepEqual(problems('up () { docker compose up -d; }', { COMPOSE_ENV_FILES: '', COMPOSE_FILE }), hostNetwork)
   assert.deepEqual(problems('up () { docker compose up -d; }', { COMPOSE_ENV_FILES: '$REPO/ci.env,more.env' }), hostNetwork)
   assert.deepEqual(problems('up () { docker compose --env-file ci.env up -d; }'), [])
   assert.deepEqual(problems('up () { docker compose --env-file ci.env --env-file more.env up -d; }'), hostNetwork)
