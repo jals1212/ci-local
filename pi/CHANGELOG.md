@@ -6,11 +6,13 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.3.0
+
 ### Changed
 
 - Status line: a `·` separates the name from the state, as other footer
   integrations do (`🚦 ci-local · ✓ passed · 4m12s`, was
-  `🚦 ci-local ✓ passed · 4m12s`).
+  `🚦 ci-local ✓ passed · 4m12s`). (#45)
 
 ## 0.2.0
 
