@@ -407,7 +407,11 @@ services:
     network_mode: "\${NET:-host}"
   bridge:
     network_mode: bridge
+  bare:
+    profiles: [app]
+    network_mode: host
 `,
+    'bare.yaml': 'services:\n  bare:\n    profiles:\n    ports:\n',
   })
   assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose up -d; }'), { cwd }), [
     'host step "Services": compose.yaml puts service "varprofile" on the host network',
@@ -415,6 +419,9 @@ services:
     'host step "Services": compose.yaml publishes ports of service "scalarports"',
     'host step "Services": compose.yaml may put service "varnet" on the host network: network_mode "${NET:-host}"',
   ])
+  // A bare `profiles:` or `ports:` in a later file adds nothing.
+  const bare = publishedPortProblems(hostPlan('up () { docker compose -f compose.yaml -f bare.yaml up -d; }'), { cwd })
+  assert.equal(bare.filter((problem) => problem.includes('"bare"')).length, 0)
 })
 
 test('COMPOSE_ENV_FILES, or --env-file, replaces .env', () => {

@@ -284,6 +284,8 @@ function composeDotenv(path) {
 }
 
 const keyName = (key) => (isScalar(key) ? key.value : key)
+// No value: absent, a `!reset`, or a bare `key:`.
+const empty = (node) => node == null || (isScalar(node) && node.value == null)
 // An alias stands for the node it names.
 const resolved = (document, node) => (isAlias(node) ? node.resolve(document) : node)
 
@@ -342,12 +344,12 @@ function mergeCompose(services, document, file) {
         service.networkMode = mode === null ? null : { mode: String(mode), file }
       } else if (field === 'ports') {
         // Not a list (an alias to one port, a variable): counted, not dropped.
-        const ports = isSeq(kept) ? kept.items.map(() => file) : kept == null || kept.value == null ? [] : [file]
+        const ports = isSeq(kept) ? kept.items.map(() => file) : empty(kept) ? [] : [file]
         service.ports = replace ? ports : [...service.ports, ...ports]
       } else if (field === 'profiles' || field === 'depends_on') {
         const key = field === 'profiles' ? 'profiles' : 'dependsOn'
         // Profiles that are not a list read as unknown: the service counts.
-        const given = field === 'profiles' && kept != null && !isSeq(kept) ? ['$'] : names(document, kept)
+        const given = field === 'profiles' && !empty(kept) && !isSeq(kept) ? ['$'] : names(document, kept)
         service[key] = replace ? given : [...service[key], ...given]
       }
     }
