@@ -556,6 +556,20 @@ function launchRepo(script) {
   return { dir, bin: fakeCiLocal(dir, script), file: join(dir, 'events.ndjson') }
 }
 
+/**
+ * The exit of a launch. Its child is unref'd (Pi must not wait on it), so
+ * awaiting it alone leaves the event loop empty: Node 22's runner then
+ * cancels the test. A timer holds the loop meanwhile.
+ */
+async function exitOf(launch) {
+  const hold = setInterval(() => {}, 1000)
+  try {
+    return await launch.exited
+  } finally {
+    clearInterval(hold)
+  }
+}
+
 /** A bash line that writes this process's queued event to $EVENTS_FILE. */
 const QUEUED = `printf '{"ts":"%s","event":"queued","project":"myapp-ci","pid":%s,"session":"s","ahead":1,"blockedBy":{"project":"erp-ci","pid":1}}\\n' "$(date -u +%FT%TZ)" $$ >"$EVENTS_FILE"`
 
@@ -569,7 +583,7 @@ test('launchRun: detached, in the repository, with the session named and the out
   const { dir } = launchRepo('echo "cwd=$PWD session=$PI_SESSION_ID args=$*"; exit 0')
   const launch = launchRun({ repo: dir, args: ['--only', 'lint'], sessionId: 's-1' })
   assert.equal(typeof launch.pid, 'number')
-  assert.equal(await launch.exited, 0)
+  assert.equal(await exitOf(launch), 0)
   const { readFileSync, realpathSync } = await import('node:fs')
   assert.equal(readFileSync(launch.output, 'utf8').trim(), `cwd=${realpathSync(dir)} session=s-1 args=--only lint`)
 })
@@ -577,7 +591,7 @@ test('launchRun: detached, in the repository, with the session named and the out
 test('launchRun: a ci-local that cannot start is an error, not a run', async () => {
   const dir = repo('CI_PROJECT="myapp-ci"\n')
   const launch = launchRun({ repo: dir, sessionId: 's', bin: join(dir, 'missing-ci-local') })
-  await launch.exited
+  await exitOf(launch)
   assert.match(launch.error, /ENOENT/)
 })
 
@@ -597,7 +611,7 @@ test('waitForStart: the run once its first event names its pid', async () => {
 test('waitForStart: a run that wrote its events and ended between two looks started, it did not fail to', async () => {
   const { dir, file } = launchRepo(`${QUEUED}; exit 1`)
   const launch = launchRun({ repo: dir, sessionId: 's', env: { ...process.env, EVENTS_FILE: file } })
-  await launch.exited
+  await exitOf(launch)
   const result = await waitForStart(launch, file, { timeoutMs: 1000, pollMs: 20 })
   assert.equal(result.kind, 'started')
 })
