@@ -6,6 +6,8 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.1.1
+
 ### Changed
 
 - The bridge role is gone from the extension: the CLI 0.8.0 no longer has a

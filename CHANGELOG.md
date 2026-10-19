@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.8.0
+
 ### Removed
 
 - The Pi bridge (`pi/bridge.ts` and the `pi` entry of `package.json`): the CLI
