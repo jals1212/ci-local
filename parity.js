@@ -11,7 +11,7 @@ import { readFile } from 'node:fs/promises'
 import { isAbsolute, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { isMap, isScalar, isSeq, parse, parseDocument } from 'yaml'
+import { isAlias, isMap, isScalar, isSeq, parse, parseDocument } from 'yaml'
 
 const run = promisify(execFile)
 const BIN = fileURLToPath(new URL('./bin/ci-local', import.meta.url))
@@ -280,37 +280,60 @@ function composeDotenv(path) {
   return variables
 }
 
-const names = (node) => {
-  if (isSeq(node)) return node.items.map((item) => String(isScalar(item) ? item.value : item))
-  if (isMap(node)) return node.items.map((pair) => String(isScalar(pair.key) ? pair.key.value : pair.key))
+const keyName = (key) => (isScalar(key) ? key.value : key)
+// An alias stands for the node it names.
+const resolved = (document, node) => (isAlias(node) ? node.resolve(document) : node)
+
+const names = (document, node) => {
+  if (isSeq(node)) return node.items.map((item) => String(keyName(resolved(document, item))))
+  if (isMap(node)) return node.items.map((pair) => String(keyName(pair.key)))
   return []
+}
+
+/**
+ * The keys of a mapping, name to node, with its YAML merge keys (`<<`)
+ * applied: its own keys win, then the earlier of the mappings merged.
+ */
+function fields(document, node) {
+  const found = new Map()
+  const map = resolved(document, node)
+  if (!isMap(map)) return found
+  for (const { key, value } of map.items) {
+    if (keyName(key) !== '<<') continue
+    const sources = resolved(document, value)
+    for (const source of isSeq(sources) ? sources.items : [sources]) {
+      for (const [name, field] of fields(document, source)) if (!found.has(name)) found.set(name, field)
+    }
+  }
+  for (const { key, value } of map.items) if (keyName(key) !== '<<') found.set(keyName(key), value)
+  return found
 }
 
 /**
  * Merges one compose document into `services`, as compose merges files:
  * `ports`, `profiles` and `depends_on` add up, `network_mode` is replaced,
  * and `!reset` (cleared) or `!override` (replaced) on a key or a service
- * stands instead. Only what the port check needs is kept.
+ * stands instead. Aliases and merge keys are followed. Only what the port
+ * check needs is kept.
  */
 function mergeCompose(services, document, file) {
-  const node = document.get('services', true)
-  if (!isMap(node)) return
-  for (const pair of node.items) {
-    const name = String(isScalar(pair.key) ? pair.key.value : pair.key)
-    const definition = pair.value
-    if (definition?.tag === '!reset') {
+  for (const [key, given] of fields(document, document.get('services', true))) {
+    const name = String(key)
+    const definition = resolved(document, given)
+    const tag = given?.tag ?? definition?.tag
+    if (tag === '!reset') {
       services.delete(name)
       continue
     }
-    if (definition?.tag === '!override' || !services.has(name)) {
+    if (tag === '!override' || !services.has(name)) {
       services.set(name, { ports: [], networkMode: null, profiles: [], dependsOn: [] })
     }
     const service = services.get(name)
-    if (!isMap(definition)) continue
-    for (const { key, value } of definition.items) {
-      const field = isScalar(key) ? key.value : key
-      const replace = value?.tag === '!reset' || value?.tag === '!override'
-      const kept = value?.tag === '!reset' ? null : value
+    for (const [field, value] of fields(document, definition)) {
+      const node = resolved(document, value)
+      const fieldTag = value?.tag ?? node?.tag
+      const replace = fieldTag === '!reset' || fieldTag === '!override'
+      const kept = fieldTag === '!reset' ? null : node
       if (field === 'network_mode') {
         const mode = isScalar(kept) ? kept.value : null
         service.networkMode = mode === null ? null : { mode: String(mode), file }
@@ -319,7 +342,7 @@ function mergeCompose(services, document, file) {
         service.ports = replace ? ports : [...service.ports, ...ports]
       } else if (field === 'profiles' || field === 'depends_on') {
         const key = field === 'profiles' ? 'profiles' : 'dependsOn'
-        service[key] = replace ? names(kept) : [...service[key], ...names(kept)]
+        service[key] = replace ? names(document, kept) : [...service[key], ...names(document, kept)]
       }
     }
   }

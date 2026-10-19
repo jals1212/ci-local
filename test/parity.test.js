@@ -345,6 +345,34 @@ test('"$@" in the host step\'s own function is the arguments the step gives it',
   ])
 })
 
+test('anchors, aliases and merge keys are followed, as compose follows them', () => {
+  const cwd = composeProject({
+    'compose.yaml': `x-ports: &ports ["80:80"]
+x-host: &host host
+x-base: &base
+  image: nginx
+  ports: ["81:81"]
+services:
+  web:
+    ports: *ports
+  net:
+    network_mode: *host
+  copy: *base
+  merged:
+    <<: *base
+  own:
+    <<: *base
+    ports: []
+`,
+  })
+  assert.deepEqual(publishedPortProblems(hostPlan('up () { docker compose up -d; }'), { cwd }), [
+    'host step "Services": compose.yaml publishes ports of service "web"',
+    'host step "Services": compose.yaml puts service "net" on the host network',
+    'host step "Services": compose.yaml publishes ports of service "copy"',
+    'host step "Services": compose.yaml publishes ports of service "merged"',
+  ])
+})
+
 test('compose run publishes the ports of what it depends on, not of its own service', () => {
   const cwd = dossier({ 'docker/ci-local/compose.override.yml': 'services:\n  api:\n    network_mode: !reset null\n    ports: ["80:80"]\n' })
   const plan = hostPlan('up () { docker compose run --rm -e X=1 api npm test; }', { composeEnv: { COMPOSE_FILE } })
