@@ -7,6 +7,13 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Removed
+
+- The Pi bridge (`pi/bridge.ts` and the `pi` entry of `package.json`): the CLI
+  is no longer a Pi package. Install `@jals1212/ci-local-pi`
+  (`pi install npm:@jals1212/ci-local-pi`, then
+  `pi remove npm:@jals1212/ci-local`). (#35)
+
 ## 0.7.0
 
 ### Added

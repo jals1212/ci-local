@@ -10,7 +10,7 @@
   },
   "homepage": "https://github.com/jals1212/ci-local#readme",
   "bugs": "https://github.com/jals1212/ci-local/issues",
-  "keywords": ["ci", "github-actions", "docker", "local", "workflow", "parity", "pi-package"],
+  "keywords": ["ci", "github-actions", "docker", "local", "workflow", "parity"],
   "type": "module",
   "bin": {
     "ci-local": "bin/ci-local"
@@ -26,11 +26,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["bin", "docker", "pi/bridge.ts", "pi/extensions", "pi/skills", "parity.js", "parity.d.ts", "status.js", "status.d.ts", "CHANGELOG.md"],
-  "pi": {
-    "extensions": ["./pi/bridge.ts"],
-    "skills": ["./pi/skills"]
-  },
+  "files": ["bin", "docker", "parity.js", "parity.d.ts", "status.js", "status.d.ts", "CHANGELOG.md"],
   "engines": {
     "node": ">=20"
   },

@@ -401,12 +401,9 @@ a read-only tool for the agent, and it only reads the events file each run
 writes; see [its README](pi/README.md) for what it shows and which Pi it
 needs.
 
-Until 0.7.x this package carried the extension itself. If you installed it
-from here, switch: `pi install npm:@jals1212/ci-local-pi`, then
-`pi remove npm:@jals1212/ci-local`. Until 0.8.0 the Pi entry that remains here
-says so once per session, and steps aside when the new package is loaded too.
-While both are installed Pi also reports a `name "ci-local" collision` for the
-skill: both copies are the same, and it goes once the old package is removed.
+Coming from 0.4–0.7, where this package carried the extension:
+`pi install npm:@jals1212/ci-local-pi`, then `pi remove npm:@jals1212/ci-local`
+(the CLI no longer loads in Pi from 0.8.0).
 
 Outside Pi nothing changes: `npx ci-local` does not use any of this.
 
