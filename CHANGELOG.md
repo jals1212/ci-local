@@ -7,6 +7,18 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Fixed
+
+- The published-port check no longer passes what it cannot read: `"$@"` and
+  `$1`… stay unknown (every service counts) when the plan records no arguments,
+  when the function moves them (`shift`, `set --`) and past the last argument;
+  a profile from a variable, or not a list, counts as enabled; `ports` that are
+  not a list (an alias to one port) count as published; and a `network_mode`
+  from a variable is a problem. (#41)
+- The env files are those compose reads: `--env-file` (each one, later ones
+  winning), else `COMPOSE_ENV_FILES`, else `.env`. `--print-plan` records
+  `COMPOSE_ENV_FILES` in `composeEnv`.
+
 ## 0.8.1
 
 ### Fixed

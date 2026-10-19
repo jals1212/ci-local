@@ -444,7 +444,7 @@ print_plan() {
   # The compose variables host steps inherit (exported only, as compose sees
   # them), so a check reads the compose files a bare `docker compose up` does.
   printf '},"composeEnv":{'
-  for name in COMPOSE_FILE COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR; do
+  for name in COMPOSE_FILE COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES; do
     printenv "$name" >/dev/null || continue
     printf '%s%s:%s' "$sep" "$(json_string "$name")" "$(json_string "$(printenv "$name")")"
     sep=,

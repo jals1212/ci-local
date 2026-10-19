@@ -236,12 +236,15 @@ test('--print-plan carries the source of every function the config defines, and 
 
 test('--print-plan records the compose variables the config exports, and only exported ones', () => {
   const dir = project(
-    'CI_PROJECT=p\nCI_JOBS=(a)\nexport COMPOSE_FILE=compose.yml:ci/override.yml\nCOMPOSE_PROFILES=app\nci_plan() { ci_step box "x" true; }\n'
+    'CI_PROJECT=p\nCI_JOBS=(a)\nexport COMPOSE_FILE=compose.yml:ci/override.yml\nexport COMPOSE_ENV_FILES=ci.env\nCOMPOSE_PROFILES=app\nci_plan() { ci_step box "x" true; }\n'
   )
   const env = Object.fromEntries(Object.entries({ ...process.env }).filter(([key]) => !key.startsWith('COMPOSE_')))
   const result = spawnSync('bash', [BIN, '--print-plan'], { cwd: dir, encoding: 'utf8', env })
   assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(JSON.parse(result.stdout).composeEnv, { COMPOSE_FILE: 'compose.yml:ci/override.yml' })
+  assert.deepEqual(JSON.parse(result.stdout).composeEnv, {
+    COMPOSE_FILE: 'compose.yml:ci/override.yml',
+    COMPOSE_ENV_FILES: 'ci.env',
+  })
 })
 
 const git = (cwd, ...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' })
