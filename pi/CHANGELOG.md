@@ -6,6 +6,14 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+### Fixed
+
+- A `ci-local.config.sh` written after the session started is now followed:
+  `ci_local_run`, or the end of a turn, sets up the status line, the cards and
+  the end card, which before came only after a `/reload`. When nothing can
+  follow the run (no UI, or no events file), `ci_local_run` no longer promises
+  a footer or an end card. (#51)
+
 ## 0.3.0
 
 ### Changed

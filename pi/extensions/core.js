@@ -618,14 +618,21 @@ function endedLine(launch) {
   return `ci-local ${verb} ${howEnded(launch)} before a run started`
 }
 
-/** What ci_local_run tells the agent of a launch and how it stands. */
-export function launchReport(result, launch, project) {
+/**
+ * What ci_local_run tells the agent of a launch and how it stands. followed:
+ * whether this session follows the run (a footer and an end card will come).
+ */
+export function launchReport(result, launch, project, { followed = true } = {}) {
   const where = `Output: ${launch.output}.`
-  const follow = 'The footer follows it and its end card reaches you when it ends: do not poll, sleep or run `ci-local --status`.'
+  const follow = followed
+    ? 'The footer follows it and its end card reaches you when it ends: do not poll, sleep or run `ci-local --status`.'
+    : 'This session cannot follow it (no UI, or no events file to read), so no footer or end card will come: read its output, or ask ci_local_status.'
   if (result.kind === 'started')
     return `ci-local started (pid ${launch.pid}) for ${project}: ${stateText(result.run.state)}. ${follow} ${where}`
-  if (result.kind === 'waiting')
-    return `ci-local launched (pid ${launch.pid}) for ${project}, no event yet: another run of ${project} may hold its events file until it ends. ${follow} ${where}`
+  if (result.kind === 'waiting') {
+    const why = followed ? `: another run of ${project} may hold its events file until it ends` : ''
+    return `ci-local launched (pid ${launch.pid}) for ${project}, no event yet${why}. ${follow} ${where}`
+  }
   const tail = outputTail(launch.output)
   return [
     `${endedLine(launch)}. ${where}`,

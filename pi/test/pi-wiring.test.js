@@ -374,6 +374,69 @@ test('ci_local_run starts the run detached, as this session\'s: the tool says it
   })
 })
 
+test('ci_local_run in a session started before the config existed: the footer and a start card follow its run (#51)', TS, async () => {
+  const extension = await loadExtension()
+  const repo = mkdtempSync(join(tmpdir(), 'pi-late-'))
+  const file = join(repo, 'events.ndjson')
+  await withPolling(file, async (tick) => {
+    const me = await openSession(extension, { repo, sessionId: 'me' })
+    writeFileSync(join(repo, 'ci-local.config.sh'), 'CI_PROJECT="late-ci"\n')
+    fakeCiLocal(
+      repo,
+      `printf '{"ts":"%s","event":"queued","project":"late-ci","pid":%s,"session":"%s","ahead":1,"blockedBy":{"project":"other-ci","pid":1}}\\n' "$(date -u +%FT%TZ)" $$ "$PI_SESSION_ID" >"$CI_LOCAL_EVENTS"; exec sleep 30`
+    )
+    const result = await me.pi.tools.ci_local_run.execute('call-1', {}, undefined, undefined, me.ctx)
+    try {
+      assert.equal(result.details.kind, 'started')
+      assert.match(result.content[0].text, /The footer follows it/)
+      tick()
+      assert.match(me.statuses.at(-1), /ci-local · ◌ queued/)
+      assert.deepEqual(me.pi.entries.map(({ data }) => data.phase), ['starting'])
+    } finally {
+      process.kill(result.details.pid)
+    }
+  })
+})
+
+test('a config that appears after the session started is picked up at the end of a turn (#51)', TS, async () => {
+  const extension = await loadExtension()
+  const repo = mkdtempSync(join(tmpdir(), 'pi-late-'))
+  const file = join(repo, 'events.ndjson')
+  await withPolling(file, async (tick) => {
+    const me = await openSession(extension, { repo, sessionId: 'me' })
+    await me.pi.handlers.turn_end({ type: 'turn_end' }, me.ctx)
+    tick()
+    assert.deepEqual(me.statuses, [], 'no config yet: nothing to follow')
+    writeFileSync(join(repo, 'ci-local.config.sh'), 'CI_PROJECT="late-ci"\n')
+    write(file, [queuedBehind('late-ci', 'me')])
+    await me.pi.handlers.turn_end({ type: 'turn_end' }, me.ctx)
+    tick()
+    assert.match(me.statuses.at(-1), /ci-local · ◌ queued/)
+    assert.deepEqual(me.pi.entries.map(({ data }) => data.phase), ['starting'])
+  })
+})
+
+test('ci_local_run with nothing to follow the run (no events file) does not promise a footer or an end card', TS, async () => {
+  const { repo } = glueRepoWithCiLocal('glue-ci', 'exec sleep 30')
+  const saved = process.env.CI_LOCAL_EVENTS
+  process.env.CI_LOCAL_EVENTS = 'off'
+  try {
+    const { createCiLocalExtension } = await import('../extensions/ci-local.ts')
+    const me = await openSession(createCiLocalExtension({ launchWaitMs: 0 }), { repo, sessionId: 'me' })
+    const result = await me.pi.tools.ci_local_run.execute('call-1', {}, undefined, undefined, me.ctx)
+    try {
+      assert.equal(result.details.kind, 'waiting')
+      assert.doesNotMatch(result.content[0].text, /The footer follows it/)
+      assert.match(result.content[0].text, /ci_local_status/)
+    } finally {
+      process.kill(result.details.pid)
+    }
+  } finally {
+    if (saved === undefined) delete process.env.CI_LOCAL_EVENTS
+    else process.env.CI_LOCAL_EVENTS = saved
+  }
+})
+
 test('ci_local_run: a launch that ends before any event, after the tool returned, gets a failed card and a wake', TS, async () => {
   const { createCiLocalExtension } = await import('../extensions/ci-local.ts')
   const extension = createCiLocalExtension({ launchWaitMs: 0 })
