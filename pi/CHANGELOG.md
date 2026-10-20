@@ -6,6 +6,8 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.3.1
+
 ### Fixed
 
 - A `ci-local.config.sh` written after the session started is now followed:
