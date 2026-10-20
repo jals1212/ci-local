@@ -89,6 +89,9 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
   // agent_start to agent_settled (in-run compaction and retries included).
   let delivery: ReturnType<typeof createDelivery> | undefined
   let runActive = false
+  // The reason of the session's session_start (createStatusLine reads it);
+  // undefined before one and after session_shutdown, when nothing is followed.
+  let startReason: string | undefined
   // The runs ci_local_run started, by pid, until their run shows in the events
   // file (seen) or they end. One that ends unseen, after the tool returned,
   // gets an end card of its own (exitCard): no event will ever name it. Each
@@ -104,7 +107,10 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     runActive = false
     delivery?.boundary()
   })
-  pi.on('turn_end', async () => delivery?.boundary())
+  pi.on('turn_end', async (_event, ctx) => {
+    follow(ctx)
+    delivery?.boundary()
+  })
   pi.on('session_compact', async () => delivery?.boundary())
   pi.on('session_compact_failed', async () => delivery?.boundary())
 
@@ -167,6 +173,8 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const found = findProject(ctx.cwd)
       if (!found) throw new Error(`no ci-local.config.sh with a literal CI_PROJECT at or above ${ctx.cwd}`)
+      // Followed before the launch, so the tracker is there when the run starts.
+      const followed = follow(ctx)
       const sessionId = ctx.sessionManager.getSessionId()
       const launch = launchRun({ repo: found.repo, args: params.args ?? [], sessionId })
       const tracked: Launch = Object.assign(launch, { seen: false, waiting: true, sessionId })
@@ -178,7 +186,7 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
         if (launch.pid !== undefined) launches.delete(launch.pid)
         if (launch.error) throw new Error(`cannot start ${launch.bin}: ${launch.error}`)
       }
-      return { content: [{ type: 'text', text: launchReport(result, launch, found.project) }], details: { kind: result.kind, pid: launch.pid } }
+      return { content: [{ type: 'text', text: launchReport(result, launch, found.project, { followed }) }], details: { kind: result.kind, pid: launch.pid } }
     },
   })
 
@@ -197,11 +205,25 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
   pi.on('session_start', async (event, ctx: ExtensionContext) => {
     stop()
     runActive = false
-    if (!ctx.hasUI) return
+    startReason = event.reason
+    follow(ctx)
+  })
+
+  /**
+   * Sets up what follows the runs of the session's repository (the tick timer,
+   * the status line, the cards, the delivery to the agent); true once it is
+   * running. session_start calls it, and so do ci_local_run and turn_end while
+   * nothing is followed yet: a ci-local.config.sh written during the session
+   * is picked up then, not only after a /reload (#51).
+   */
+  function follow(ctx: ExtensionContext): boolean {
+    if (timer) return true
+    if (startReason === undefined || !ctx.hasUI) return false
+    const reason = startReason
     const found = findProject(ctx.cwd)
-    if (!found) return
+    if (!found) return false
     const file = eventsFileFor(found.project, process.env, found.repo)
-    if (!file) return // CI_LOCAL_EVENTS=off, or no private cache: runs write no events
+    if (!file) return false // CI_LOCAL_EVENTS=off, or no private cache: runs write no events
     const tracker = createTracker()
     // Start cards this session already shows (a reload, a resumed session): not again.
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -226,7 +248,7 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     // The status line leaves out a run already over whose result a session
     // already showed, and records each finished run it shows (see
     // createStatusLine in core.js).
-    const statusLine = createStatusLine({ file, sessionId, reason: event.reason })
+    const statusLine = createStatusLine({ file, sessionId, reason })
 
     const tick = () => {
       let run
@@ -309,10 +331,12 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     tick()
     timer = setInterval(tick, POLL_MS)
     timer.unref?.()
-  })
+    return true
+  }
 
   pi.on('session_shutdown', async () => {
     stop()
+    startReason = undefined
     delete (globalThis as Record<symbol, unknown>)[FLAG]
   })
 }
