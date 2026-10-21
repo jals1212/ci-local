@@ -22,6 +22,14 @@ import {
   eventsFileFor,
   findProject,
   footerText,
+  HERDR_RESULT_MS,
+  HERDR_REFRESH_MS,
+  HERDR_TOKEN_MAX,
+  createHerdrLine,
+  createHerdrPublisher,
+  herdrPane,
+  herdrReport,
+  herdrSend,
   ciLocalBin,
   exitCard,
   launchReport,
@@ -715,4 +723,119 @@ test('launchRun: a launch killed by a signal records the signal, not a status', 
 test('launchReport: a launch killed by a signal before its run says so', () => {
   const report = launchReport({ kind: 'exited' }, { pid: 5, code: null, signal: 'SIGKILL', output: '/nonexistent/output.log' }, 'myapp-ci')
   assert.match(report, /^ci-local was killed by SIGKILL before a run started\./)
+})
+
+// Herdr: the sidebar's $ci token, in a pane Herdr runs.
+
+const stateOf = (events) => readRun(eventsFile(events)).state
+const finished = (ms, extra = {}) => [run(), { ts: ago(ms), event: 'end', result: 'passed', durationMs: 61_000, devStack: 'none', ...extra }]
+
+test('herdrPane: only inside a Herdr pane, with its pane and socket', () => {
+  assert.equal(herdrPane({}), null)
+  assert.equal(herdrPane({ HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1' }), null)
+  assert.equal(herdrPane({ HERDR_ENV: '0', HERDR_PANE_ID: 'w1:p1', HERDR_SOCKET_PATH: '/s' }), null)
+  assert.equal(herdrPane({ HERDR_ENV: '1', HERDR_PANE_ID: ' ', HERDR_SOCKET_PATH: '/s' }), null)
+  assert.deepEqual(herdrPane({ HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', HERDR_SOCKET_PATH: '/s' }), { pane: 'w1:p1', socket: '/s' })
+})
+
+test('createHerdrLine: the footer while a run is in flight, nothing without a run', () => {
+  const line = createHerdrLine()
+  assert.equal(line.text(null), null)
+  const flying = stateOf([run(), { ts: ago(1), event: 'start', step: 'lint', index: 2, total: 4 }])
+  assert.equal(line.text({ key: 'k', state: flying }), footerText(flying))
+})
+
+test('createHerdrLine: a result shows for HERDR_RESULT_MS after its end, then goes', () => {
+  const line = createHerdrLine()
+  const recent = stateOf(finished(60_000))
+  assert.equal(line.text({ key: 'a', state: recent }), footerText(recent))
+  const old = stateOf(finished(HERDR_RESULT_MS + 1000))
+  assert.equal(line.text({ key: 'b', state: old }), null)
+})
+
+test('createHerdrLine: a stopped run (no end) shows from when it was seen stopping, not one found stopped', () => {
+  let now = 1_000_000
+  const line = createHerdrLine({ now: () => now })
+  const stopped = stateOf([run({ pid: deadPid() })])
+  assert.equal(line.text({ key: 'old', state: stopped }), null, 'found stopped: when it ended is unknown')
+  const flying = stateOf([run()])
+  line.text({ key: 'new', state: flying })
+  assert.equal(line.text({ key: 'new', state: stopped }), footerText(stopped))
+  now += HERDR_RESULT_MS
+  assert.equal(line.text({ key: 'new', state: stopped }), null)
+})
+
+test('createHerdrLine: clipped to what Herdr keeps of a token', () => {
+  const line = createHerdrLine()
+  const long = stateOf([run(), { ts: ago(1), event: 'start', step: 'x'.repeat(200), index: 1, total: 4 }])
+  const text = line.text({ key: 'k', state: long })
+  assert.equal([...text].length, HERDR_TOKEN_MAX)
+  assert.ok(text.endsWith('…'))
+})
+
+test('herdrReport: the token, a TTL, or a clear', () => {
+  assert.deepEqual(herdrReport('w1:p1', 'x'), { method: 'pane.report_metadata', params: { pane_id: 'w1:p1', source: 'ci-local', tokens: { ci: 'x' }, ttl_ms: 30_000 } })
+  assert.deepEqual(herdrReport('w1:p1', null), { method: 'pane.report_metadata', params: { pane_id: 'w1:p1', source: 'ci-local', tokens: { ci: null } } })
+})
+
+test('createHerdrPublisher: sends on change, refreshes before the TTL, clears once, one at a time', async () => {
+  let now = 0
+  const sent = []
+  const send = async (value) => (sent.push(value), true)
+  const publisher = createHerdrPublisher({ send, now: () => now })
+  publisher.update(null)
+  assert.deepEqual(sent, [], 'nothing shown, nothing to clear')
+  publisher.update('a')
+  publisher.update('b') // while 'a' is on its way: kept for after
+  publisher.update('c') // the latest wins
+  assert.deepEqual(sent, ['a'])
+  await publisher.idle()
+  assert.deepEqual(sent, ['a', 'c'])
+  publisher.update('c')
+  assert.deepEqual(sent, ['a', 'c'], 'unchanged: not again')
+  now += HERDR_REFRESH_MS
+  publisher.update('c')
+  assert.deepEqual(sent, ['a', 'c', 'c'], 'refreshed before its TTL ends')
+  await publisher.idle()
+  publisher.update(null)
+  await publisher.idle()
+  publisher.update(null)
+  assert.deepEqual(sent, ['a', 'c', 'c', null])
+})
+
+test('createHerdrPublisher: a failed send is tried again on the next update', async () => {
+  const sent = []
+  let ok = false
+  const publisher = createHerdrPublisher({ send: async (value) => (sent.push(value), ok) })
+  publisher.update('a')
+  await publisher.idle()
+  ok = true
+  publisher.update('a')
+  await publisher.idle()
+  publisher.update('a')
+  await publisher.idle()
+  assert.deepEqual(sent, ['a', 'a'])
+})
+
+test('herdrSend: one JSON line to the socket, true when Herdr says ok, false otherwise', async () => {
+  const { createServer } = await import('node:net')
+  const socket = join(mkdtempSync(join(tmpdir(), 'hs-')), 's.sock')
+  const got = []
+  const server = createServer((conn) => {
+    conn.on('data', (data) => {
+      const request = JSON.parse(String(data).trim())
+      got.push(request)
+      conn.write(JSON.stringify({ id: request.id, result: { type: 'ok' } }) + '\n')
+    })
+  })
+  await new Promise((resolve) => server.listen(socket, resolve))
+  try {
+    assert.equal(await herdrSend({ pane: 'w1:p1', socket })('x'), true)
+    assert.equal(got[0].method, 'pane.report_metadata')
+    assert.deepEqual(got[0].params.tokens, { ci: 'x' })
+    assert.equal(typeof got[0].id, 'string')
+  } finally {
+    server.close()
+  }
+  assert.equal(await herdrSend({ pane: 'w1:p1', socket: join(tmpdir(), 'no-such.sock') })('x'), false)
 })

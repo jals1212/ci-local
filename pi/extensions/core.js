@@ -19,6 +19,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 
@@ -660,6 +661,156 @@ export function exitCard({ pid, code, signal = null, output, tail = outputTail(o
         `> ${howEnded({ code, signal })} · pid ${pid} · output \`${output}\``,
         ...tail.map((line) => `> ${line}`),
       ],
+    },
+  }
+}
+
+// Herdr (https://herdr.dev): in a pane Herdr runs, the footer line is also the
+// pane's `$ci` metadata token, so a row `["$ci"]` in Herdr's Agents sidebar
+// shows the run. A token is display only: it never touches the agent's state.
+
+/** The token's name, as a sidebar row names it: `$ci`. */
+export const HERDR_TOKEN = 'ci'
+/** Who reports the token. No sequence numbers: one sender, one report at a time. */
+export const HERDR_SOURCE = 'ci-local'
+/** Herdr drops the token this long after the last report: a Pi gone leaves nothing behind. */
+export const HERDR_TTL_MS = 30_000
+/** A token unchanged is reported again this often, well inside its TTL. */
+export const HERDR_REFRESH_MS = 10_000
+/** How long a run's result stays in the sidebar after the run ends. */
+export const HERDR_RESULT_MS = 5 * 60_000
+/** Herdr keeps at most this many characters of a token. */
+export const HERDR_TOKEN_MAX = 80
+
+/** The pane and socket of the Herdr pane this process runs in, or null outside one. */
+export function herdrPane(env = process.env) {
+  const pane = env.HERDR_PANE_ID?.trim()
+  const socket = env.HERDR_SOCKET_PATH?.trim()
+  return env.HERDR_ENV === '1' && pane && socket ? { pane, socket } : null
+}
+
+function clip(text) {
+  const chars = [...text]
+  return chars.length <= HERDR_TOKEN_MAX ? text : chars.slice(0, HERDR_TOKEN_MAX - 1).join('') + '…'
+}
+
+/**
+ * What the token says for a run: the footer line while it is in flight, and
+ * its result for HERDR_RESULT_MS after it ended (by its end event; a run that
+ * stopped without one, from when this session saw it stop). Null otherwise:
+ * no run, or a result older than that, or a run found already stopped.
+ */
+export function createHerdrLine({ now = Date.now } = {}) {
+  let flying // the key of the last run seen in flight
+  const endedAt = new Map()
+  return {
+    text(run) {
+      if (!run) return null
+      if (!FINISHED.has(run.state.state)) {
+        flying = run.key
+        return clip(footerText(run.state))
+      }
+      if (!endedAt.has(run.key)) {
+        const ended = Date.parse(run.state.end?.ts ?? '')
+        endedAt.clear()
+        endedAt.set(run.key, Number.isFinite(ended) ? ended : run.key === flying ? now() : null)
+      }
+      const ended = endedAt.get(run.key)
+      return ended !== null && now() - ended < HERDR_RESULT_MS ? clip(footerText(run.state)) : null
+    },
+  }
+}
+
+/** The socket request that sets the token (with its TTL), or clears it (null). */
+export function herdrReport(pane, value) {
+  const params = { pane_id: pane, source: HERDR_SOURCE, tokens: { [HERDR_TOKEN]: value } }
+  if (value !== null) params.ttl_ms = HERDR_TTL_MS
+  return { method: 'pane.report_metadata', params }
+}
+
+let herdrRequests = 0
+
+/**
+ * A sender of the token to Herdr's socket (one JSON line, one reply): resolves
+ * true when Herdr accepted it, false on any error or after `timeoutMs`.
+ */
+export function herdrSend({ pane, socket }, { timeoutMs = 2000 } = {}) {
+  return (value) =>
+    new Promise((resolve) => {
+      const id = `ci-local-${process.pid}-${++herdrRequests}`
+      let reply = ''
+      let done = false
+      const finish = (ok) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        conn.destroy()
+        resolve(ok)
+      }
+      const conn = createConnection(socket)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      timer.unref?.()
+      conn.on('connect', () => conn.write(JSON.stringify({ id, ...herdrReport(pane, value) }) + '\n'))
+      conn.on('data', (data) => {
+        reply += data
+        const end = reply.indexOf('\n')
+        if (end < 0) return
+        try {
+          const answer = JSON.parse(reply.slice(0, end))
+          finish(answer.id === id && answer.result?.type === 'ok')
+        } catch {
+          finish(false)
+        }
+      })
+      conn.on('error', () => finish(false))
+      conn.on('close', () => finish(false))
+    })
+}
+
+/**
+ * Keeps Herdr's token in step with `update(value)` (null clears it): a report
+ * when the value changes, again every HERDR_REFRESH_MS while it stays, one
+ * report at a time (the latest value waits for the one on its way). A failed
+ * report is tried again at the next update. `idle()` resolves once nothing is
+ * on its way.
+ */
+export function createHerdrPublisher({ send, now = Date.now, refreshMs = HERDR_REFRESH_MS }) {
+  let shown = null // what Herdr has
+  let sentAt = 0
+  let inFlight = null
+  let pending // the value to report once inFlight is done
+  const update = (value) => {
+    if (inFlight) {
+      pending = value
+      return
+    }
+    const due = value !== shown || (value !== null && now() - sentAt >= refreshMs)
+    if (!due) return
+    let sending
+    try {
+      sending = Promise.resolve(send(value))
+    } catch {
+      sending = Promise.resolve(false)
+    }
+    inFlight = sending
+      .catch(() => false)
+      .then((ok) => {
+        if (ok) {
+          shown = value
+          sentAt = now()
+        }
+        inFlight = null
+        if (pending !== undefined) {
+          const next = pending
+          pending = undefined
+          update(next)
+        }
+      })
+  }
+  return {
+    update,
+    async idle() {
+      while (inFlight) await inFlight
     },
   }
 }

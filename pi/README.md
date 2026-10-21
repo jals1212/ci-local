@@ -35,6 +35,26 @@ runs ci-local or Docker itself:
   shows it where it lists extension statuses: Gentle Shell, for one, under
   **Integrations** in the sidebar's Status card (or in its bottom bar on a
   narrow terminal).
+- **Herdr sidebar**: in a [Herdr](https://herdr.dev) pane (`HERDR_ENV=1`,
+  `HERDR_PANE_ID`, `HERDR_SOCKET_PATH`), the status line is also the pane's
+  `ci` metadata token while a run is queued or running, and its result for 5
+  minutes after it ends. The token is display only: the agent's state in
+  Herdr does not change. It is reported again every 10 seconds with a
+  30-second TTL, so it goes away when Pi does. To show it, add a `$ci` row to
+  the Agents sidebar in Herdr's `config.toml`, then run `herdr server reload-config`:
+
+  ```toml
+  [ui.sidebar.agents]
+  rows = [
+    ["state_icon", "machine", "workspace", "tab"],
+    ["agent"],
+    [{ token = "$ci", rules = [
+      { contains = "✗", fg = "#f38ba8" },
+      { contains = "✓", fg = "#a6e3a1" },
+      { contains = "⧗", fg = "#f9e2af" },
+    ] }],
+  ]
+  ```
 - **Only the session's own runs** get the cards and the notification, and
   reach the agent: runs this session started. A run started from Pi's bash
   tool names its session (ci-local records Pi's `PI_SESSION_ID` as `session`
