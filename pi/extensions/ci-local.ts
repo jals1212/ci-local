@@ -13,6 +13,9 @@
 //   this session's process (a background job, even orphaned). Another
 //   session's run in the same repository, or one started in a terminal, shows
 //   in the status line alone.
+// - Herdr: in a pane Herdr runs, the status line is also the pane's `$ci`
+//   metadata token while a run is in flight and for 5 minutes after it ends,
+//   so a `["$ci"]` row in Herdr's Agents sidebar shows it (display only).
 // - When a run starts: a card in the transcript when it is starting (or
 //   waiting for its turn), another when its steps start; for you only (session
 //   entries, never in the model's context, never repeated after a reload).
@@ -42,6 +45,8 @@ import {
   LAUNCH_WAIT_MS,
   WAKE_TEXT,
   cardContent,
+  createHerdrLine,
+  createHerdrPublisher,
   createDelivery,
   createStatusLine,
   createTracker,
@@ -49,6 +54,8 @@ import {
   eventsFileFor,
   exitCard,
   findProject,
+  herdrPane,
+  herdrSend,
   launchReport,
   launchRun,
   ownsRun,
@@ -98,6 +105,10 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
   // belongs to the session that started it; another session drops it.
   type Launch = ReturnType<typeof launchRun> & { seen: boolean; waiting: boolean; sessionId: string }
   const launches = new Map<number, Launch>()
+  // In a Herdr pane, the footer line is also the pane's `$ci` sidebar token
+  // (see createHerdrLine in core.js); null elsewhere. Read when a session
+  // starts following, so a test or a moved pane gets its own.
+  let herdr: { pane: string; socket: string; publisher: ReturnType<typeof createHerdrPublisher> } | undefined
 
   pi.on('agent_start', async () => {
     runActive = true
@@ -249,6 +260,11 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     // already showed, and records each finished run it shows (see
     // createStatusLine in core.js).
     const statusLine = createStatusLine({ file, sessionId, reason })
+    const pane = herdrPane(process.env)
+    if (pane && (herdr?.pane !== pane.pane || herdr.socket !== pane.socket)) {
+      herdr = { ...pane, publisher: createHerdrPublisher({ send: herdrSend(pane) }) }
+    }
+    const herdrLine = pane ? createHerdrLine() : undefined
 
     const tick = () => {
       let run
@@ -259,6 +275,7 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
       }
       const { footer, changed } = statusLine.update(run)
       if (changed) ctx.ui.setStatus(KEY, footer)
+      if (herdrLine) herdr?.publisher.update(herdrLine.text(run))
       settleLaunches(run)
       // Only this session's own runs get cards and reach the agent, as Gentle
       // AI's job notices go only to the session that started the job. Another
@@ -336,6 +353,11 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
 
   pi.on('session_shutdown', async () => {
     stop()
+    // The sidebar token goes with the session (its TTL would end it anyway).
+    if (herdr) {
+      herdr.publisher.update(null)
+      await herdr.publisher.idle()
+    }
     startReason = undefined
     delete (globalThis as Record<symbol, unknown>)[FLAG]
   })

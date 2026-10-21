@@ -21,6 +21,10 @@ import { fakeCiLocal } from './fixture/fake-ci-local.js'
 
 const canRunTs = Boolean(process.features?.typescript)
 
+// Tests run in whatever pane they are started from: never report to a real
+// Herdr. The Herdr test sets its own pane and socket.
+for (const name of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH']) delete process.env[name]
+
 const deadPid = () => Number(spawnSync('bash', ['-c', 'echo $$'], { encoding: 'utf8' }).stdout.trim())
 const ago = (ms) => new Date(Date.now() - ms).toISOString()
 
@@ -521,4 +525,46 @@ test('the package alone says nothing about moving', TS, async () => {
     const me = await openSession(extension, { repo, sessionId: 'me' })
     assert.deepEqual(me.notices, [])
   })
+})
+
+test('in a Herdr pane, the footer is the pane\'s $ci token while the run goes, then its result, and the session clears it', TS, async () => {
+  const { createServer } = await import('node:net')
+  const extension = await loadExtension()
+  const { repo, file } = glueRepo('glue-ci')
+  const socket = join(mkdtempSync(join(tmpdir(), 'herdr-')), 'h.sock')
+  const reports = []
+  const server = createServer((conn) => {
+    conn.on('data', (data) => {
+      for (const line of String(data).split('\n').filter(Boolean)) {
+        const request = JSON.parse(line)
+        reports.push(request.params)
+        conn.write(JSON.stringify({ id: request.id, result: { type: 'ok' } }) + '\n')
+      }
+    })
+  })
+  await new Promise((resolve) => server.listen(socket, resolve))
+  const until = async (check) => {
+    for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(check(), JSON.stringify(reports))
+  }
+  Object.assign(process.env, { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', HERDR_SOCKET_PATH: socket })
+  try {
+    write(file, [runEvent('glue-ci', 'me')])
+    await withPolling(file, async (tick) => {
+      const me = await openSession(extension, { repo, sessionId: 'me' })
+      await until(() => reports.length === 1)
+      assert.equal(reports[0].pane_id, 'w1:p1')
+      assert.equal(reports[0].source, 'ci-local')
+      assert.match(reports[0].tokens.ci, /^🚦 ci-local · ⧗ /)
+      assert.equal(reports[0].ttl_ms, 30_000)
+      write(file, [record('end', { result: 'passed', durationMs: 1000, devStack: 'none' })])
+      tick()
+      await until(() => /✓ passed/.test(reports.at(-1).tokens.ci ?? ''))
+      await me.shutdown()
+      assert.deepEqual(reports.at(-1).tokens, { ci: null })
+    })
+  } finally {
+    server.close()
+    for (const name of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH']) delete process.env[name]
+  }
 })
