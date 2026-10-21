@@ -6,13 +6,15 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.4.0
+
 ### Added
 
 - Herdr sidebar: in a Herdr pane, the status line is also the pane's `$ci`
   metadata token while a run is in flight and for 5 minutes after it ends, so
   a `["$ci"]` row in Herdr's Agents sidebar shows ci-local next to the
   agent. Display only, refreshed with a 30-second TTL, and cleared when the
-  session ends.
+  session ends. (#54)
 
 ## 0.3.1
 
