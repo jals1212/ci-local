@@ -122,7 +122,7 @@ npx ci-local                  # every job
 npx ci-local --only tests     # some jobs
 npx ci-local --list           # the steps, without running them
 npx ci-local --keep           # leave everything up to look at it
-npx ci-local --down           # remove what --keep left
+npx ci-local --down           # remove what --keep left; stops a run still going
 npx ci-local --quiet          # step output to log files, milestones only
 npx ci-local --live           # step output live, even without a terminal
 npx ci-local --events run.ndjson  # one JSON line per milestone, to follow
@@ -515,6 +515,7 @@ on your machine, with `set -e` in force. Options:
 | `CI_LOCAL_QUEUE_POLL` | Seconds between two looks at the queue while waiting, above 0. Default: `2`. |
 | `CI_LOCAL_QUEUE_TIMEOUT` | Whole seconds a run waits for its turn before it gives up and exits 3. `0`: no limit. Default: `0`. Not a whole number: status 2. |
 | `CI_LOCAL_QUEUE_NOTICE` | Whole seconds between two `Still waiting for …` lines while waiting. `0`: none. Default: `300`. Not a whole number: status 2. |
+| `CI_LOCAL_DOWN_GRACE` | Whole seconds `--down` gives the step of a run it stops to end on TERM before it kills its processes. Default: `10`. Not a whole number: status 2. |
 | `XDG_CACHE_HOME`, `HOME`, `TMPDIR` | Where `<cache>` is: `$XDG_CACHE_HOME`, else `$HOME/.cache`, else `$TMPDIR/ci-local-<uid>`. |
 
 Set in the environment, `CI_LOCAL_QUIET` and `CI_LOCAL_EVENTS` are a standing
@@ -530,7 +531,7 @@ warning.
 | 2 | A usage or configuration error; nothing ran. | No run recorded (or an unusable cache, or `CI_LOCAL_EVENTS=off`). |
 | 3 | `--no-wait` and the machine is busy, or `CI_LOCAL_QUEUE_TIMEOUT` ran out while waiting; nothing ran. | Queued, starting or running. |
 | 4 | | Stopped: interrupted, or its process is gone without an end. |
-| 130, 143 | Interrupted (Ctrl-C, `kill`). During the steps the summary still says `FAILED at step: interrupted`; while waiting in the queue nothing ran and nothing is printed. | |
+| 130, 143 | Interrupted (Ctrl-C, `kill`). During the steps the summary still comes, ending `STOPPED during step: <step>` (the step's row says `STOPPED`); while waiting in the queue nothing ran and nothing is printed. | |
 
 ## What it leaves on your machine
 
