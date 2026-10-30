@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.9.0
+
 ### Fixed
 
 - `--down` during a run of the same project stops that run instead of breaking
