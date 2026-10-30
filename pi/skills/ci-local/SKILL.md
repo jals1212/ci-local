@@ -18,7 +18,7 @@ Use when running, waiting on, reading, or configuring `ci-local` (`npx ci-local`
 - Unwatched runs are quiet: milestones and the summary on stdout, each step's output in its own log. From 0.5.0 that is the default without a terminal; before 0.5.0, add `--quiet`. Never add `--live` to a background run.
 - Do not touch the checkout while a run is in flight (no edits, no branch switch): the steps read it.
 - Never start a second run to "check" the first. Runs queue machine-wide by themselves (one Docker user at a time); a waiting run is normal, not a hang.
-- Read the result from the run itself: `PASSED:` / `FAILED at step:` and `Development stack untouched`. A changed development stack is a failure.
+- Read the result from the run itself: `PASSED:` / `FAILED at step:` / `STOPPED` (stopped on purpose, not a failure) and `Development stack untouched`. A changed development stack is a failure.
 - On failure, read only the failing step's log (named in the failure output or `--status`), not every log.
 - Everything a run creates carries the `$CI_PROJECT` prefix and the `$CI_LABEL` label; never hard-code another name, publish a port, or reuse a development container name. Local compose smokes use `-p <own-name>`.
 
@@ -45,7 +45,7 @@ Use when running, waiting on, reading, or configuring `ci-local` (`npx ci-local`
 
 ## Output Contract
 
-Report: project, commit, result line (`PASSED` / `FAILED at step`), total time, any `DEVIATES` lines, and whether the development stack was untouched.
+Report: project, commit, result line (`PASSED` / `FAILED at step` / `STOPPED`), total time, any `DEVIATES` lines, and whether the development stack was untouched.
 
 ## References
 

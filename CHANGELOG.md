@@ -7,6 +7,23 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Fixed
+
+- `--down` during a run of the same project stops that run instead of breaking
+  it: the run gets TERM before the teardown, so it ends `interrupted` and
+  `--status` (and the Pi extension) say **stopped**, not **failed** with a
+  timed-out step. A run still queued is left alone. A step that ignores TERM
+  has its processes killed after `CI_LOCAL_DOWN_GRACE` seconds (default 10),
+  orphans included; a pid given to another process since is left alone.
+  `--down` then waits up to `CI_LOCAL_DOWN_WAIT` seconds (default 120) for
+  the run's own cleanup, says so if the run is still going, and removes what
+  is left (a run with `--keep` too). `--down` reads `--events` to find the run, so it no longer
+  says that option is ignored.
+- A stopped run (Ctrl-C, `kill`, `--down`) no longer reads as a failure in its
+  summary: the step under way says `STOPPED` with its time, the last line is
+  `STOPPED during step: <step>` instead of `FAILED at step: interrupted`, and
+  the container list is "at the stop". The exit status (130, 143) is the same.
+
 ## 0.8.2
 
 ### Fixed
