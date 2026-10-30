@@ -516,6 +516,7 @@ on your machine, with `set -e` in force. Options:
 | `CI_LOCAL_QUEUE_TIMEOUT` | Whole seconds a run waits for its turn before it gives up and exits 3. `0`: no limit. Default: `0`. Not a whole number: status 2. |
 | `CI_LOCAL_QUEUE_NOTICE` | Whole seconds between two `Still waiting for …` lines while waiting. `0`: none. Default: `300`. Not a whole number: status 2. |
 | `CI_LOCAL_DOWN_GRACE` | Whole seconds `--down` gives the step of a run it stops to end on TERM before it kills its processes. Default: `10`. Not a whole number: status 2. |
+| `CI_LOCAL_DOWN_WAIT` | Whole seconds `--down` waits for a run it stops to clean up and end; past them it says the run is still going and removes what is left anyway. Default: `120`. Not a whole number: status 2. |
 | `XDG_CACHE_HOME`, `HOME`, `TMPDIR` | Where `<cache>` is: `$XDG_CACHE_HOME`, else `$HOME/.cache`, else `$TMPDIR/ci-local-<uid>`. |
 
 Set in the environment, `CI_LOCAL_QUIET` and `CI_LOCAL_EVENTS` are a standing

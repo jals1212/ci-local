@@ -14,8 +14,10 @@ their `release x.y.z:` commit messages.
   `--status` (and the Pi extension) say **stopped**, not **failed** with a
   timed-out step. A run still queued is left alone. A step that ignores TERM
   has its processes killed after `CI_LOCAL_DOWN_GRACE` seconds (default 10),
-  orphans included. `--down` then waits for the run's own cleanup and removes
-  what is left. `--down` reads `--events` to find the run, so it no longer
+  orphans included; a pid given to another process since is left alone.
+  `--down` then waits up to `CI_LOCAL_DOWN_WAIT` seconds (default 120) for
+  the run's own cleanup, says so if the run is still going, and removes what
+  is left (a run with `--keep` too). `--down` reads `--events` to find the run, so it no longer
   says that option is ignored.
 - A stopped run (Ctrl-C, `kill`, `--down`) no longer reads as a failure in its
   summary: the step under way says `STOPPED` with its time, the last line is

@@ -416,6 +416,67 @@ test('--down finds the run through --events, and stops a step that ignores TERM 
   assert.equal(readEvents(file).at(-1).result, 'interrupted')
 })
 
+test('--down during a run with --keep removes what it kept, after the run has ended', async () => {
+  const dir = project(['ci_step host Slow slow'])
+  const file = join(dir, 'events.ndjson')
+  const teardowns = join(dir, 'teardowns')
+  // Each teardown says whether the run had already ended (its end event).
+  writeFileSync(
+    join(dir, 'ci-local.config.sh'),
+    [
+      'slow() { echo started; sleep 30; }',
+      `ci_teardown() { if grep -q '"event":"end"' '${file}' 2>/dev/null; then echo after; else echo before; fi >>'${teardowns}'; }`,
+      readFileSync(join(dir, 'ci-local.config.sh'), 'utf8'),
+    ].join('\n')
+  )
+  const env = { XDG_CACHE_HOME: mkdtempSync(join(tmpdir(), 'ci-local-cache-')) }
+  const run = ciLocal(['--keep', '--events', file], { cwd: dir, env })
+  await until(() => existsSync(file) && readEvents(file).some(({ event }) => event === 'start'))
+  const log = () => readEvents(file).find(({ event }) => event === 'start').log
+  await until(() => existsSync(log()) && readFileSync(log(), 'utf8').includes('started'))
+  const down = await ciLocal(['--down', '--events', file], { cwd: dir, env })
+  assert.equal(down.status, 0, down.err)
+  const { status, out } = await run
+  assert.equal(status, 143)
+  assert.match(out, /\nKept: project ci-local-selftest is still up/)
+  assert.equal(readEvents(file).at(-1).result, 'interrupted')
+  // The last teardown came after the run ended: nothing it kept is left.
+  assert.equal(readFileSync(teardowns, 'utf8').trim().split('\n').at(-1), 'after')
+})
+
+test('--down says so when the run is still going after its stop', async () => {
+  const dir = project(["ci_step box Ok 'true'"])
+  const file = join(dir, 'events.ndjson')
+  // A "run" that ignores TERM, named by an events file with no end event.
+  // No child of its own: the grace's KILL of the step's processes leaves it be.
+  const stubborn = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => {}, 30000)"], {
+    stdio: 'ignore',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  try {
+    writeFileSync(file, `{"event":"queued","pid":${stubborn.pid}}\n{"event":"run"}\n`)
+    const began = Date.now()
+    const down = await ciLocal(['--down', '--events', file], {
+      cwd: dir,
+      env: { CI_LOCAL_DOWN_GRACE: '1', CI_LOCAL_DOWN_WAIT: '1' },
+    })
+    assert.equal(down.status, 0, down.err)
+    assert.match(down.out, new RegExp(`^Stopping run ${stubborn.pid} of project ci-local-selftest\n`))
+    assert.match(down.err, new RegExp(`ci-local: run ${stubborn.pid} is still going after its stop\n`))
+    assert.match(down.out, /\nRemoved what project ci-local-selftest left\.\n$/)
+    assert.ok(Date.now() - began < 15000, 'waited CI_LOCAL_DOWN_WAIT, not the default 120s')
+  } finally {
+    stubborn.kill('SIGKILL')
+  }
+})
+
+test('CI_LOCAL_DOWN_WAIT that is not a whole number is a status 2', async () => {
+  const dir = project(["ci_step box Ok 'true'"])
+  const { status, err } = await ciLocal(['--down'], { cwd: dir, env: { CI_LOCAL_DOWN_WAIT: 'soon' } })
+  assert.equal(status, 2)
+  assert.match(err, /CI_LOCAL_DOWN_WAIT must be a whole number of seconds, got 'soon'/)
+})
+
 test('--down with no run going removes what is left and stops nothing', async () => {
   const dir = project(["ci_step box Ok 'true'"])
   const { status, out } = await ciLocal(['--down'], { cwd: dir })
