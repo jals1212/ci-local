@@ -6,6 +6,14 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.5.1
+
+### Fixed
+
+- The skill says runs may go several at once (`CI_LOCAL_MAX_RUNS`, or
+  `maxRuns` in `~/.ci-local/config.json`, from ci-local 0.10.0), and names the
+  README's queue section by its new title.
+
 ## 0.5.0
 
 ### Added
