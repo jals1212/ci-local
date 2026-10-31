@@ -121,21 +121,26 @@ test('footerText: one short line per state', () => {
     footerText(read([run(), { ts: ago(1), event: 'start', step: 'lint', index: 2, total: 4 }])),
     /^🚦 ci-local · ⧗ \[2\/4\] lint · 1m0[56]s$/
   )
+  const ended = (endTs) => [
+    run(),
+    { ts: ago(1), event: 'start', step: 'lint', index: 2, total: 4 },
+    { ts: ago(1), event: 'fail', step: 'lint', index: 2, total: 4, exitCode: 1, durationMs: 5 },
+    { ts: endTs, event: 'end', result: 'failed', durationMs: 3000, devStack: 'none' },
+  ]
+  const end = new Date(2026, 0, 5, 13, 7, 42) // 13:07 local time
+  const at = (ms) => end.getTime() + ms
   assert.equal(
-    footerText(read([run(), { ts: ago(1), event: 'end', result: 'passed', durationMs: 61_000, devStack: 'none' }])),
-    '🚦 ci-local · ✓ passed · 1m01s'
+    footerText(read([run(), { ts: end.toISOString(), event: 'end', result: 'passed', durationMs: 61_000, devStack: 'none' }]), at(10 * 60_000)),
+    '🚦 ci-local · ✓ passed · 1m01s · 10m ago'
   )
-  assert.equal(
-    footerText(
-      read([
-        run(),
-        { ts: ago(1), event: 'start', step: 'lint', index: 2, total: 4 },
-        { ts: ago(1), event: 'fail', step: 'lint', index: 2, total: 4, exitCode: 1, durationMs: 5 },
-        { ts: ago(1), event: 'end', result: 'failed', durationMs: 3000, devStack: 'none' },
-      ])
-    ),
-    '🚦 ci-local · ✗ failed at lint · 3s'
-  )
+  const failed = read(ended(end.toISOString()))
+  assert.equal(footerText(failed, at(59_999)), '🚦 ci-local · ✗ failed at lint · 3s · just now')
+  assert.equal(footerText(failed, at(-5_000)), '🚦 ci-local · ✗ failed at lint · 3s · just now', 'a clock a little behind the run')
+  assert.equal(footerText(failed, at(60_000)), '🚦 ci-local · ✗ failed at lint · 3s · 1m ago')
+  assert.equal(footerText(failed, at(59 * 60_000 + 59_999)), '🚦 ci-local · ✗ failed at lint · 3s · 59m ago')
+  assert.equal(footerText(failed, at(60 * 60_000)), '🚦 ci-local · ✗ failed at lint · 3s · 13:07', 'after an hour: the time it ended')
+  assert.equal(footerText(failed, at(26 * 3600_000)), '🚦 ci-local · ✗ failed at lint · 3s · 13:07')
+  assert.equal(footerText(read(ended('not a date'))), '🚦 ci-local · ✗ failed at lint · 3s', 'no end time: none said')
   assert.equal(footerText(read([run({ pid: deadPid() })])), '🚦 ci-local · ⊘ stopped')
 })
 

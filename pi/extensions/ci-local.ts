@@ -2,8 +2,9 @@
 // ci-local run in Pi's own UI, so neither the agent nor you write it by hand.
 //
 // - Status line: `🚦 ci-local · ⧗ [3/8] lint · 2m05s`, `🚦 ci-local · ◌ queued ·
-//   2 ahead (erp-ci running)`, then `🚦 ci-local · ✓ passed · 4m12s` / `🚦 ci-local ·
-//   ✗ failed at lint` until the next run (🚦 is ci-local's own emoji, see BRAND).
+//   2 ahead (erp-ci running)`, then `🚦 ci-local · ✓ passed · 4m12s · 10m ago` / `🚦 ci-local ·
+//   ✗ failed at lint · 2m10s · 13:10` (how long ago it ended, then from an
+//   hour on the time it ended) until the next run (🚦 is ci-local's own emoji, see BRAND).
 //   A run already over when a session starts is shown only if no session
 //   showed its result yet, like a message not yet delivered (createStatusLine).
 // - Cards and the agent: only for runs this session started, as Gentle AI's job
