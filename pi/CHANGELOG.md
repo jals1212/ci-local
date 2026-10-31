@@ -6,12 +6,14 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.5.0
+
 ### Added
 
 - The status line of a finished run says when it ended, so an old result is
   not taken for a new one: how long ago for its first hour
   (`🚦 ci-local · ✗ failed at lint · 32s · 10m ago`), then the local time it
-  ended (`· 13:10`).
+  ended (`· 13:10`). (#58)
 
 ## 0.4.0
 
