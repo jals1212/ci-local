@@ -12,6 +12,11 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+// The user's settings (~/.ci-local/config.json, a CI_LOCAL_MAX_RUNS in the
+// shell) must not change what these runs do: a test that wants them sets them.
+process.env.CI_LOCAL_USER_CONFIG = 'off'
+delete process.env.CI_LOCAL_MAX_RUNS
+
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
 chmodSync(join(FAKE_DOCKER, 'docker'), 0o755)

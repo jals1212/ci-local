@@ -33,7 +33,7 @@
   "scripts": {
     "prepare": "node scripts/link-self.mjs",
     "pretest": "node scripts/link-self.mjs",
-    "test": "CI_LOCAL_USER_CONFIG=off node --test test/*.test.js pi/test/*.test.js",
+    "test": "node --test test/*.test.js pi/test/*.test.js",
     "lint": "shellcheck bin/ci-local test/fixture/ci-local.config.sh"
   },
   "dependencies": {
