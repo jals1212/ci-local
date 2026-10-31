@@ -1,6 +1,6 @@
 {
   "name": "@jals1212/ci-local",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Run a Node project's GitHub Actions workflow steps on your machine, in Linux, without touching your development stack, with parity checks that keep the two in step.",
   "license": "MIT",
   "author": "jals1212",
