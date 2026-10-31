@@ -363,6 +363,9 @@ The `total` of the summary counts from the turn, not from the wait.
   for a machine whose Docker takes them. Runs still take turns, first come
   first served: a run goes ahead when fewer than N live runs came before it,
   and waits otherwise (`Waiting for <the oldest of them> · <N or more> ahead`).
+  Two runs of the same project still never go at once (they share its
+  containers, network and volumes): the second waits for the first, whatever
+  N is.
   Each run reads its own value, so set it the same for every run (in your
   shell profile, say); a run of a version before 0.10.0 still goes one at a
   time and waits for the first slot.

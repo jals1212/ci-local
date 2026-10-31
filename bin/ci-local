@@ -1116,8 +1116,9 @@ run_plan() {
 # (and the VM behind it on a Mac) does not take several of these at once.
 # CI_LOCAL_MAX_RUNS=N lets N go at once, for a machine that takes them. A run
 # takes a ticket, named by the time it came, and goes ahead when its ticket is
-# among the first N of live processes AND it wins one of the N lock
-# directories (slots).
+# among the first N of live processes, no live ticket before it is of its own
+# project (a project's runs share its containers: one at a time, whatever N),
+# AND it wins one of the N lock directories (slots).
 #
 #   QUEUE_DIR/<epoch-ms>-<pid>   one ticket per run, with project=, pid=,
 #                                pidStart= (its start time), repo=
@@ -1140,6 +1141,7 @@ MY_LOCK=""       # the slot we hold ("" when none)
 SLEEPER=""
 AHEAD=0          # live tickets before ours
 FIRST_TICKET=""  # the first of them
+SAME_TICKET=""   # the first of them of our project ("" when none)
 BLOCK_PROJECT="" # who we wait for ("" when nobody)
 BLOCK_PID=""
 
@@ -1175,12 +1177,14 @@ write_ticket() {
   printf 'project=%s\npid=%s\npidStart=%s\nrepo=%s\n' "$CI_PROJECT" "$$" "$MY_START" "$REPO" >"$tmp" && mv "$tmp" "$MY_TICKET"
 }
 
-# Counts the live tickets before ours into AHEAD (FIRST_TICKET is the first)
-# and removes those of dead processes. False when ours is not there.
+# Counts the live tickets before ours into AHEAD (FIRST_TICKET is the first,
+# SAME_TICKET the first of our project) and removes those of dead processes.
+# False when ours is not there.
 queue_scan() {
   local f name pid
   AHEAD=0
   FIRST_TICKET=""
+  SAME_TICKET=""
   for f in "$QUEUE_DIR"/[0-9]*-[0-9]*; do
     [[ -f "$f" ]] || continue
     name=${f##*/}
@@ -1190,6 +1194,7 @@ queue_scan() {
     if pid_alive "$pid" "$(ticket_value "$f" pidStart)"; then
       AHEAD=$((AHEAD + 1))
       [[ -n "$FIRST_TICKET" ]] || FIRST_TICKET=$f
+      [[ -n "$SAME_TICKET" || "$(ticket_value "$f" project)" != "$CI_PROJECT" ]] || SAME_TICKET=$f
     else
       rm -f "$f"
     fi
@@ -1256,9 +1261,11 @@ queue_lock() {
 
 # One look at the queue: true with a slot taken. Otherwise AHEAD,
 # BLOCK_PROJECT and BLOCK_PID say what we wait for: the first live ticket
-# before ours when MAX_RUNS or more are, else the holder of a slot.
+# before ours when MAX_RUNS or more are, else the first one of our project
+# (two runs of a project never go at once: they share its containers, network
+# and volumes), else the holder of a slot.
 queue_poll() {
-  local name tries k held_project held_pid
+  local name tries k held_project held_pid blocker
   for tries in 1 2 3; do
     BLOCK_PROJECT=""
     BLOCK_PID=""
@@ -1267,13 +1274,15 @@ queue_poll() {
       write_ticket
       queue_scan || true
     fi
-    if [[ $AHEAD -ge $MAX_RUNS ]]; then
-      name=${FIRST_TICKET##*/}
+    blocker=$SAME_TICKET
+    [[ $AHEAD -lt $MAX_RUNS ]] || blocker=$FIRST_TICKET
+    if [[ -n "$blocker" ]]; then
+      name=${blocker##*/}
       BLOCK_PID=$((10#${name##*-}))
-      BLOCK_PROJECT="$(ticket_value "$FIRST_TICKET" project)"
+      BLOCK_PROJECT="$(ticket_value "$blocker" project)"
       # That run ended between the scan and this read: look again rather than
       # report an unknown project (or a change that is none).
-      [[ -n "$BLOCK_PROJECT" || -e "$FIRST_TICKET" || $tries -eq 3 ]] || continue
+      [[ -n "$BLOCK_PROJECT" || -e "$blocker" || $tries -eq 3 ]] || continue
       [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
       return 1
     fi
