@@ -24,6 +24,11 @@ import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+// The user's settings (~/.ci-local/config.json, a CI_LOCAL_MAX_RUNS in the
+// shell) must not change what these runs do: a test that wants them sets them.
+process.env.CI_LOCAL_USER_CONFIG = 'off'
+delete process.env.CI_LOCAL_MAX_RUNS
+
 const BIN = fileURLToPath(new URL('../bin/ci-local', import.meta.url))
 const FAKE_DOCKER = fileURLToPath(new URL('./fixture/fake-docker/', import.meta.url))
 chmodSync(join(FAKE_DOCKER, 'docker'), 0o755)
@@ -1003,6 +1008,46 @@ test('CI_LOCAL_MAX_RUNS=2: a slot of a dead process is taken over', async () => 
   assert.equal(status, 0, err)
   assert.doesNotMatch(out, /Waiting for/)
   assert.deepEqual(readdirSync(queue), ['lock'])
+})
+
+// A `mv` that plays the run that breaks the same stale lock first: when ci-local
+// moves a lock aside (to .stale.<pid>), that other run has already made the
+// lock again, live. RACE=swap: the lock moved is the new live one (its pid
+// written just before the move). RACE=remake: the live one is made just after
+// the move, so the stale one moved cannot be put back.
+function racingMv() {
+  const dir = scratch('mv-')
+  writeFileSync(
+    join(dir, 'mv'),
+    [
+      '#!/bin/bash',
+      'src="${@: -2:1}"; dst="${@: -1}"',
+      'case "$dst" in */.stale.*) stale=1 ;; *) stale=0 ;; esac',
+      'if [ $stale = 1 ] && [ "$RACE" = swap ]; then printf "%s\\n" "$LIVE_PID" >"$src/pid"; echo live >"$src/project"; fi',
+      '/bin/mv "$@" || exit $?',
+      'if [ $stale = 1 ] && [ "$RACE" = remake ]; then mkdir "$src" && printf "%s\\n" "$LIVE_PID" >"$src/pid" && echo live >"$src/project"; fi',
+      '',
+    ].join('\n')
+  )
+  chmodSync(join(dir, 'mv'), 0o755)
+  return dir
+}
+
+test('breaking a stale lock is compare-and-move: a live lock made meanwhile is put back, or left alone', async () => {
+  const dir = project('proj-a', [WORK])
+  const mv = racingMv()
+  for (const race of ['swap', 'remake']) {
+    const queue = scratch()
+    plantLock(queue, { pid: deadPid(), project: 'ghost' })
+    const env = { RACE: race, LIVE_PID: String(process.pid), PATH: `${mv}:${FAKE_DOCKER}:${process.env.PATH}` }
+    const { status, err } = await start(['--no-wait'], { cwd: dir, queue, env }).done
+    assert.equal(status, 3, `${race}: the live lock holds the machine`)
+    assert.equal(err, `ci-local: the machine is busy: live (pid ${process.pid})\n`, race)
+    assert.equal(readFileSync(join(queue, 'lock', 'pid'), 'utf8'), `${process.pid}\n`, `${race}: the live lock is in place`)
+    assert.deepEqual(readdirSync(join(queue, 'lock')).sort(), ['pid', 'project'], `${race}: nothing moved inside it`)
+    assert.deepEqual(readdirSync(queue), ['lock'], `${race}: no .stale left, no ticket`)
+    assert.equal(existsSync(join(dir, 'ran')), false)
+  }
 })
 
 test('CI_LOCAL_MAX_RUNS: anything but a whole number from 1 to 99 is a usage error, status 2, before anything runs', async () => {
