@@ -7,6 +7,8 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.10.0
+
 ### Added
 
 - `CI_LOCAL_MAX_RUNS=N` (1 to 99, default 1) lets N runs go at once on the
