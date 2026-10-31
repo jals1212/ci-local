@@ -285,10 +285,30 @@ export function createStatusLine({ file, sessionId, reason }) {
   }
 }
 
-/** One short line for the footer: `🚦 ci-local · ✓ passed · 4m12s`. */
-export function footerText(state) {
+/**
+ * One short line for the footer: `🚦 ci-local · ✓ passed · 4m12s · 10m ago`. A
+ * finished run says when it ended (from its end event), so an old result is
+ * not taken for a new one: how long ago within the first hour, then the local
+ * HH:MM, which no longer changes. `now` is the time it is said at.
+ */
+export function footerText(state, now = Date.now()) {
   // The state's glyph sits by the state, after the name.
-  return `${BRAND} ci-local · ${GLYPHS[state.state] ?? GLYPHS.stopped} ${stateText(state)}`
+  const line = `${BRAND} ci-local · ${GLYPHS[state.state] ?? GLYPHS.stopped} ${stateText(state)}`
+  const at = FINISHED.has(state.state) ? endedText(state.end?.ts, now) : null
+  return at ? `${line} · ${at}` : line
+}
+
+/** Until then a result says how long ago it ended; after, the time it ended. */
+export const RELATIVE_END_MS = 60 * 60_000
+
+/** When a run ended, as the footer says it, or null without an end time. */
+function endedText(ts, now) {
+  const date = new Date(ts ?? '')
+  if (Number.isNaN(date.getTime())) return null
+  const age = now - date.getTime()
+  if (age < 60_000) return 'just now' // a clock a little ahead says so too
+  if (age < RELATIVE_END_MS) return `${Math.floor(age / 60_000)}m ago`
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 /** The state of a run in a few words, as the footer says it after its glyph. */
@@ -716,7 +736,7 @@ export function createHerdrLine({ now = Date.now } = {}) {
         endedAt.set(run.key, Number.isFinite(ended) ? ended : run.key === flying ? now() : null)
       }
       const ended = endedAt.get(run.key)
-      return ended !== null && now() - ended < HERDR_RESULT_MS ? clip(footerText(run.state)) : null
+      return ended !== null && now() - ended < HERDR_RESULT_MS ? clip(footerText(run.state, now())) : null
     },
   }
 }
