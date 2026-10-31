@@ -489,7 +489,8 @@ Options:
   --no-wait       Do not wait for another ci-local run to finish: when the
                   machine is busy, say which run holds it and exit with
                   status 3. Runs of every project on this machine take turns,
-                  first come first served, so Docker has one at a time.
+                  first come first served, so Docker has one at a time
+                  (CI_LOCAL_MAX_RUNS=N: N at a time; default 1).
                   CI_LOCAL_QUEUE=off lets runs overlap; the queue lives in
                   CI_LOCAL_QUEUE_DIR (default ~/.cache/ci-local/queue).
                   A waiting run says every CI_LOCAL_QUEUE_NOTICE seconds
@@ -542,6 +543,9 @@ QUEUE_POLL="${CI_LOCAL_QUEUE_POLL:-2}" # seconds between two looks at the queue
 # between two "Still waiting" lines (0: none). Checked when a real run starts.
 QUEUE_TIMEOUT="${CI_LOCAL_QUEUE_TIMEOUT:-0}"
 QUEUE_NOTICE="${CI_LOCAL_QUEUE_NOTICE:-300}"
+# How many runs of the queue may go at once on the machine (1: one at a time).
+# Checked when a real run starts.
+MAX_RUNS="${CI_LOCAL_MAX_RUNS:-1}"
 EVENTS="${CI_LOCAL_EVENTS:-}"
 # Without --events a run writes to the default file (see DEFAULT_EVENTS);
 # CI_LOCAL_EVENTS=off writes none.
@@ -931,6 +935,11 @@ for name in CI_LOCAL_QUEUE_TIMEOUT CI_LOCAL_QUEUE_NOTICE; do
 done
 QUEUE_TIMEOUT=$((10#$QUEUE_TIMEOUT))
 QUEUE_NOTICE=$((10#$QUEUE_NOTICE))
+if [[ ! "$MAX_RUNS" =~ ^[0-9]{1,2}$ ]] || ((10#$MAX_RUNS < 1)); then
+  echo "ci-local: CI_LOCAL_MAX_RUNS must be a whole number from 1 to 99 (runs at once), got '$MAX_RUNS'" >&2
+  exit 2
+fi
+MAX_RUNS=$((10#$MAX_RUNS))
 
 [[ "$(type -t ci_preflight)" != function ]] || ci_preflight
 
@@ -1064,22 +1073,31 @@ run_plan() {
 
 # ------------------------------------------------------------------ queue
 #
-# One run at a time on the machine, whatever the project: Docker (and the
-# VM behind it on a Mac) does not take several of these at once. A run takes
-# a ticket, named by the time it came, and goes ahead when its ticket is the
-# first of a live process AND it wins the lock directory.
+# One run at a time on the machine by default, whatever the project: Docker
+# (and the VM behind it on a Mac) does not take several of these at once.
+# CI_LOCAL_MAX_RUNS=N lets N go at once, for a machine that takes them. A run
+# takes a ticket, named by the time it came, and goes ahead when its ticket is
+# among the first N of live processes AND it wins one of the N lock
+# directories (slots).
 #
 #   QUEUE_DIR/<epoch-ms>-<pid>   one ticket per run, with project=, pid=,
 #                                pidStart= (its start time), repo=
-#   QUEUE_DIR/lock/              made with mkdir (atomic) by the run in turn;
-#                                lock/pid names it (its pid, then its start
-#                                time: older versions read the first line
-#                                alone), lock/project says whose
+#   QUEUE_DIR/lock/              slot 1, made with mkdir (atomic) by a run in
+#   QUEUE_DIR/lock.<k>/          turn; slot k (2..N). lock/pid names it (its
+#                                pid, then its start time: older versions read
+#                                the first line alone), lock/project says
+#                                whose. Older versions know slot 1 alone.
+#
+# A holder keeps its ticket until it has given its slot back, and tickets come
+# in the order of their names, so a holder's place in the queue never grows:
+# every holder is among the first N live tickets, and a run among them that
+# holds no slot finds one free (unless a run of an older version, or one with
+# another CI_LOCAL_MAX_RUNS, holds it).
 
 QUEUE_DIR=""
 MY_NAME=""
 MY_TICKET=""
-HAVE_LOCK=0
+MY_LOCK=""       # the slot we hold ("" when none)
 SLEEPER=""
 AHEAD=0          # live tickets before ours
 FIRST_TICKET=""  # the first of them
@@ -1140,15 +1158,18 @@ queue_scan() {
   return 1
 }
 
-# Takes the lock when it is free or its holder is gone; else false, with
-# BLOCK_PROJECT and BLOCK_PID naming the holder. A live holder's lock is
-# never removed. A lock with no pid yet is a run between mkdir and its
+# The slot directory of slot k: slot 1 is `lock`, the one older versions use.
+slot_dir() { if [[ $1 -eq 1 ]]; then echo "$QUEUE_DIR/lock"; else echo "$QUEUE_DIR/lock.$1"; fi; }
+
+# queue_lock DIR: takes that slot when it is free or its holder is gone; else
+# false, with BLOCK_PROJECT and BLOCK_PID naming the holder. A live holder's
+# slot is never removed. A slot with no pid yet is a run between mkdir and its
 # write: held, until it is older than 10 seconds.
 queue_lock() {
-  local lock="$QUEUE_DIR/lock" holder hstart mtime
+  local lock=$1 holder hstart mtime stale="$QUEUE_DIR/.stale.$$" moved
   for _ in 1 2; do
     if mkdir "$lock" 2>/dev/null; then
-      HAVE_LOCK=1
+      MY_LOCK=$lock
       printf '%s' "$CI_PROJECT" >"$lock/project"
       printf '%s\n%s\n' "$$" "$MY_START" >"$lock/pid"
       return 0
@@ -1171,26 +1192,34 @@ queue_lock() {
       mtime="$(file_mtime "$lock")"
       [[ "$mtime" =~ ^[0-9]+$ && $(($(date +%s) - mtime)) -gt 10 ]] || return 1
     fi
-    # Stale: moved away whole (a half-removed lock must not be seen), then removed.
-    # This is check-then-move: between reading lock/pid and the mv, another run
-    # could in principle replace the lock with a live one, and the mv would take
-    # it. That cannot happen today: only the run whose ticket is the first live
-    # one gets here (queue_poll returns early for the others while AHEAD > 0),
-    # tickets are totally ordered by name, and the lock holder keeps its ticket
-    # until after it releases the lock, so no second run is first while a lock
-    # is held. A change that lets two runs try the lock at once (a priority
-    # lane, locking without tickets) needs a compare-and-move here: move the
-    # lock, check the moved pid is the one read, put it back if not.
-    mv "$lock" "$QUEUE_DIR/.stale.$$" 2>/dev/null && rm -rf "$QUEUE_DIR/.stale.$$"
+    # Stale: moved away whole (a half-removed slot must not be seen), then
+    # removed. Several runs may look at a slot at once (CI_LOCAL_MAX_RUNS > 1),
+    # so this is compare-and-move: between reading lock/pid and the mv,
+    # another run may have broken the stale slot and made a live one. The
+    # moved slot is checked: not the one judged stale, it is put back.
+    mv "$lock" "$stale" 2>/dev/null || continue
+    moved=""
+    [[ ! -f "$stale/pid" ]] || read -r moved 2>/dev/null <"$stale/pid" || true
+    if [[ "$moved" =~ ^[0-9]+$ && $((10#$moved)) != "$holder" ]]; then
+      # A live run's slot. Put back unless the place was taken meanwhile (a mv
+      # onto a directory would move it inside); then that run goes on without
+      # a slot, one more at once until it ends, and no slot of another is
+      # ever removed by its release (it checks lock/pid is its own).
+      if [[ ! -e "$lock" ]] && mv "$stale" "$lock" 2>/dev/null && [[ ! -e "$lock/${stale##*/}" ]]; then
+        continue
+      fi
+      rm -rf "${lock:?}/${stale##*/}"
+    fi
+    rm -rf "$stale"
   done
   return 1
 }
 
-# One look at the queue: true with the lock taken. Otherwise AHEAD,
+# One look at the queue: true with a slot taken. Otherwise AHEAD,
 # BLOCK_PROJECT and BLOCK_PID say what we wait for: the first live ticket
-# before ours, else the holder of the lock.
+# before ours when MAX_RUNS or more are, else the holder of a slot.
 queue_poll() {
-  local name tries
+  local name tries k held_project held_pid
   for tries in 1 2 3; do
     BLOCK_PROJECT=""
     BLOCK_PID=""
@@ -1199,7 +1228,7 @@ queue_poll() {
       write_ticket
       queue_scan || true
     fi
-    if [[ $AHEAD -gt 0 ]]; then
+    if [[ $AHEAD -ge $MAX_RUNS ]]; then
       name=${FIRST_TICKET##*/}
       BLOCK_PID=$((10#${name##*-}))
       BLOCK_PROJECT="$(ticket_value "$FIRST_TICKET" project)"
@@ -1209,22 +1238,32 @@ queue_poll() {
       [[ -n "$BLOCK_PROJECT" ]] || BLOCK_PROJECT=unknown
       return 1
     fi
-    queue_lock || return 1
-    BLOCK_PROJECT=""
-    BLOCK_PID=""
-    return 0
+    held_project=""
+    held_pid=""
+    for ((k = 1; k <= MAX_RUNS; k++)); do
+      if queue_lock "$(slot_dir "$k")"; then
+        BLOCK_PROJECT=""
+        BLOCK_PID=""
+        return 0
+      fi
+      # Whom we wait for: the holder of the first slot found held.
+      [[ -n "$held_project" ]] || { held_project=$BLOCK_PROJECT; held_pid=$BLOCK_PID; }
+    done
+    BLOCK_PROJECT=$held_project
+    BLOCK_PID=$held_pid
+    return 1
   done
 }
 
-# The lock (when ours: lock/pid is this process) and the ticket, given back.
+# The slot (when ours: its pid is this process) and the ticket, given back.
 queue_release() {
-  local lock="$QUEUE_DIR/lock" holder=""
-  if [[ $HAVE_LOCK -eq 1 ]]; then
-    read -r holder <"$lock/pid" 2>/dev/null || true
+  local holder=""
+  if [[ -n "$MY_LOCK" ]]; then
+    read -r holder <"$MY_LOCK/pid" 2>/dev/null || true
     if [[ "$holder" == "$$" ]]; then
-      mv "$lock" "$QUEUE_DIR/.released.$$" 2>/dev/null && rm -rf "$QUEUE_DIR/.released.$$"
+      mv "$MY_LOCK" "$QUEUE_DIR/.released.$$" 2>/dev/null && rm -rf "$QUEUE_DIR/.released.$$"
     fi
-    HAVE_LOCK=0
+    MY_LOCK=""
   fi
   [[ -z "$MY_TICKET" ]] || rm -f "$MY_TICKET"
   MY_TICKET=""

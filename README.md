@@ -199,7 +199,7 @@ Set in the environment they are a standing preference, and ignored quietly.
 
 | `event` | When | Fields besides `ts` (ISO 8601, UTC, milliseconds) |
 | --- | --- | --- |
-| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-the-queue)); again when whom it waits for changes, and when its turn comes | `schema`, `project`, `version`, `pid`, `pidStart`, `commit`, `args`, `logDir`, `session`, `ancestors` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
+| `queued` | the run is waiting for its turn (see [the queue](#one-run-at-a-time-or-n-the-queue)); again when whom it waits for changes, and when its turn comes | `schema`, `project`, `version`, `pid`, `pidStart`, `commit`, `args`, `logDir`, `session`, `ancestors` (as in `run`), `ahead` (live runs before it), `blockedBy` (`{"project", "pid"}` of the run it waits for; `null` when nobody) |
 | `run` | the run has its turn and the steps are about to run | `schema` (the events contract version, `1`; see below), `project`, `jobs`, `total`, `version`, `pid` (of ci-local), `pidStart` (its start time, as `ps -o lstart=` prints it in the C locale and UTC, for example `Sun Oct 18 14:58:57 2026`; `null` when `ps` cannot say), `commit` (12 characters; `null` outside git), `args` (the command line), `logDir` (when quiet; else `null`), `session` (the Pi session that started it, from `PI_SESSION_ID`; else `null`), `ancestors` (the pids above ci-local when it started, its parent first, up to but not with pid 1, at most 32; `[]` when `ps` cannot say. The Pi extension reads it to tell a run its session started from one that lost its parents since, by `nohup` or `setsid`) |
 | `start` | a step starts | `step`, `index` (from 1), `total`; `log` when quiet; `deviates` (the reason) when the step is marked `--deviates` |
 | `ok` | a step passed | `step`, `index`, `total`, `durationMs`; `log` when quiet; `deviates` as in `start` |
@@ -316,7 +316,7 @@ Events from before 0.6.0 have no `pidStart`: for those the pid alone decides,
 and a reused pid still looks alive. If `ps` cannot say a process's start now,
 the pid alone decides too.
 
-### One run at a time: the queue
+### One run at a time (or N): the queue
 
 Several runs at once (an agent in each of three repositories, say) freeze
 Docker, and the virtual machine behind it on a Mac. So every run of every
@@ -359,6 +359,13 @@ The `total` of the summary counts from the turn, not from the wait.
 - **Ctrl-C or `kill` while waiting** removes the run from the queue and exits
   130 or 143, with no summary and no cleanup: the runner of that project may
   be the one in use by the run ahead.
+- **`CI_LOCAL_MAX_RUNS=<N>`** (1 to 99, default `1`) lets N runs go at once,
+  for a machine whose Docker takes them. Runs still take turns, first come
+  first served: a run goes ahead when fewer than N live runs came before it,
+  and waits otherwise (`Waiting for <the oldest of them> · <N or more> ahead`).
+  Each run reads its own value, so set it the same for every run (in your
+  shell profile, say); a run of a version before 0.10.0 still goes one at a
+  time and waits for the first slot.
 - **`CI_LOCAL_QUEUE=off`** (also `0`, `false`, `no`) lets runs overlap, as
   before. It still records one `queued` event, so `--status` has no gap.
 - **`--list`, `--print-plan`, `--down`, `--status`, `--help`, `--version`** do
@@ -369,10 +376,12 @@ How it works, for the curious or for a stuck queue: the directory
 alone; the `XDG_CACHE_HOME` and `TMPDIR` fallbacks are those of the events
 file, and a path you set must be absolute) holds one ticket file per run,
 named by the time it came and its pid (the ticket also holds its `pidStart`), and a `lock` directory made by the run
-whose turn it is (`lock/pid` names it: its pid on the first line, its start
+whose turn it is (with `CI_LOCAL_MAX_RUNS` above 1, one directory per slot:
+`lock`, `lock.2`, `lock.3`, …, each made by the run that holds it; `lock/pid` names it: its pid on the first line, its start
 time on the second; versions before 0.6.0 read the first line alone, and
 read a lock without the second as before). A run goes ahead when its ticket is
-the first one of a live process and it makes the lock. Tickets and locks of
+among the first `CI_LOCAL_MAX_RUNS` of live processes (the first, by default)
+and it makes a lock. Tickets and locks of
 processes that are gone (killed, a crash, a reboot) are ignored and removed,
 and a lock with no pid, which a crash between its two steps would leave, is
 stale after 10 seconds; a lock whose process is alive is never removed. The
@@ -515,6 +524,7 @@ on your machine, with `set -e` in force. Options:
 | `CI_LOCAL_QUEUE_POLL` | Seconds between two looks at the queue while waiting, above 0. Default: `2`. |
 | `CI_LOCAL_QUEUE_TIMEOUT` | Whole seconds a run waits for its turn before it gives up and exits 3. `0`: no limit. Default: `0`. Not a whole number: status 2. |
 | `CI_LOCAL_QUEUE_NOTICE` | Whole seconds between two `Still waiting for …` lines while waiting. `0`: none. Default: `300`. Not a whole number: status 2. |
+| `CI_LOCAL_MAX_RUNS` | How many runs may go at once on the machine, 1 to 99. Default: `1`. Anything else: status 2. |
 | `CI_LOCAL_DOWN_GRACE` | Whole seconds `--down` gives the step of a run it stops to end on TERM before it kills its processes. Default: `10`. Not a whole number: status 2. |
 | `CI_LOCAL_DOWN_WAIT` | Whole seconds `--down` waits for a run it stops to clean up and end; past them it says the run is still going and removes what is left anyway. Default: `120`. Not a whole number: status 2. |
 | `XDG_CACHE_HOME`, `HOME`, `TMPDIR` | Where `<cache>` is: `$XDG_CACHE_HOME`, else `$HOME/.cache`, else `$TMPDIR/ci-local-<uid>`. |

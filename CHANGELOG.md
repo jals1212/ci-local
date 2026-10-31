@@ -7,6 +7,15 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Added
+
+- `CI_LOCAL_MAX_RUNS=N` (1 to 99, default 1) lets N runs go at once on the
+  machine, for one whose Docker takes them. Runs still take turns first come
+  first served; a run among the first N in the queue takes one of N slots
+  (`lock`, `lock.2`, … in the queue directory). Slot 1 is the `lock` older
+  versions use, so they still wait for it. Breaking the slot of a dead run is
+  now compare-and-move: a live slot made meanwhile is put back.
+
 ## 0.9.0
 
 ### Fixed
