@@ -56,7 +56,7 @@ after(() => children.forEach((child) => child.kill('SIGKILL')))
 /** A run in flight: its output so far, and `done` for its end. */
 function start(args, { cwd, queue, env = {} }) {
   const base = { ...process.env }
-  for (const name of ['CI_LOCAL_QUIET', 'CI_LOCAL_EVENTS', 'CI_LOCAL_QUEUE', 'CI_LOCAL_QUEUE_DIR', 'CI_LOCAL_QUEUE_POLL'])
+  for (const name of ['CI_LOCAL_QUIET', 'CI_LOCAL_EVENTS', 'CI_LOCAL_QUEUE', 'CI_LOCAL_QUEUE_DIR', 'CI_LOCAL_QUEUE_POLL', 'CI_LOCAL_MAX_RUNS'])
     delete base[name]
   const child = spawn('bash', [BIN, ...args], {
     cwd,
@@ -938,4 +938,161 @@ test('CI_LOCAL_QUEUE_TIMEOUT and CI_LOCAL_QUEUE_NOTICE: anything but a whole num
   // An option that runs no step ignores them, as it does the rest of the queue's settings.
   const listed = await start(['--list'], { cwd: dir, queue: scratch(), env: { CI_LOCAL_QUEUE_TIMEOUT: 'abc' } }).done
   assert.equal(listed.status, 0, listed.err)
+})
+
+// ------------------------------------------------ several at once (CI_LOCAL_MAX_RUNS)
+
+test('CI_LOCAL_MAX_RUNS=2: two runs go at once, each in its own slot; the third waits for one to end', async () => {
+  const queue = scratch()
+  const env = { CI_LOCAL_MAX_RUNS: '2' }
+  const dirA = project('proj-a', [GATE])
+  const dirB = project('proj-b', [GATE])
+  const dirC = project('proj-c', [WORK])
+  const evA = eventsOf()
+  const evC = eventsOf()
+  const runA = start(['--events', evA], { cwd: dirA, queue, env })
+  await until(() => existsSync(join(dirA, 'started')))
+  const runB = start([], { cwd: dirB, queue, env })
+  await until(() => existsSync(join(dirB, 'started')))
+  assert.doesNotMatch(runB.out, /Waiting for/, 'B does not wait for A')
+  assert.deepEqual(readdirSync(queue).filter((name) => name.startsWith('lock')).sort(), ['lock', 'lock.2'])
+  const pidA = kinds(evA, 'run')[0].pid
+
+  const runC = start(['--events', evC], { cwd: dirC, queue, env })
+  await until(() => runC.out.includes('Waiting for '))
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(existsSync(join(dirC, 'ran')), false, 'two are running: C waits')
+  assert.deepEqual(waitingLines(runC.out), [`Waiting for proj-a (pid ${pidA}) · 2 ahead`])
+
+  release(dirA)
+  const c = await runC.done
+  assert.equal(c.status, 0, c.err)
+  assert.equal(existsSync(join(dirB, 'release')), false, 'C ran while B still held its slot')
+  release(dirB)
+  for (const result of await Promise.all([runA.done, runB.done])) assert.equal(result.status, 0, result.err)
+  assert.deepEqual(readdirSync(queue), [])
+})
+
+test('CI_LOCAL_MAX_RUNS=2: a slot held by a live process leaves the other free; both held, --no-wait is refused', async () => {
+  const dir = project('proj-a', [WORK])
+  const env = { CI_LOCAL_MAX_RUNS: '2' }
+  const queue = scratch()
+  plantLock(queue, { pid: process.pid, project: 'holder' })
+  const free = await start([], { cwd: dir, queue, env }).done
+  assert.equal(free.status, 0, free.err)
+  assert.doesNotMatch(free.out, /Waiting for/)
+  assert.deepEqual(readdirSync(queue), ['lock'], 'the holder’s slot is left alone; the run gave its own back')
+
+  mkdirSync(join(queue, 'lock.2'))
+  writeFileSync(join(queue, 'lock.2', 'project'), 'other')
+  writeFileSync(join(queue, 'lock.2', 'pid'), `${process.pid}\n`)
+  const busy = await start(['--no-wait'], { cwd: dir, queue, env }).done
+  assert.equal(busy.status, 3)
+  assert.equal(busy.err, `ci-local: the machine is busy: holder (pid ${process.pid})\n`)
+})
+
+test('CI_LOCAL_MAX_RUNS=2: a slot of a dead process is taken over', async () => {
+  const queue = scratch()
+  const dead = deadPid()
+  plantLock(queue, { pid: process.pid, project: 'holder' })
+  mkdirSync(join(queue, 'lock.2'))
+  writeFileSync(join(queue, 'lock.2', 'project'), 'ghost')
+  writeFileSync(join(queue, 'lock.2', 'pid'), `${dead}\n`)
+  const dir = project('proj-a', [WORK])
+  const { status, out, err } = await start([], { cwd: dir, queue, env: { CI_LOCAL_MAX_RUNS: '2' } }).done
+  assert.equal(status, 0, err)
+  assert.doesNotMatch(out, /Waiting for/)
+  assert.deepEqual(readdirSync(queue), ['lock'])
+})
+
+test('CI_LOCAL_MAX_RUNS: anything but a whole number from 1 to 99 is a usage error, status 2, before anything runs', async () => {
+  const dir = project('proj-a', [WORK])
+  for (const value of ['0', 'abc', '-1', '1.5', '100']) {
+    const queue = scratch()
+    const { status, out, err } = await start([], { cwd: dir, queue, env: { CI_LOCAL_MAX_RUNS: value } }).done
+    assert.equal(status, 2, value)
+    assert.equal(err, `ci-local: CI_LOCAL_MAX_RUNS must be a whole number from 1 to 99 (runs at once), got '${value}'\n`)
+    assert.equal(out, '')
+    assert.deepEqual(readdirSync(queue), [])
+  }
+})
+
+// ------------------------------------------------ the user's settings file
+
+/** A home with these files (path relative to it → content; objects as JSON). */
+function home(files) {
+  const dir = scratch('home-')
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(join(dir, path, '..'), { recursive: true })
+    writeFileSync(join(dir, path), typeof content === 'string' ? content : JSON.stringify(content))
+  }
+  return dir
+}
+const userEnv = (dir, extra = {}) => ({ HOME: dir, XDG_CONFIG_HOME: '', CI_LOCAL_USER_CONFIG: '', ...extra })
+const v1 = (settings) => ({ schema: 'ci-local.config/v1', ...settings })
+
+test('~/.config/ci-local/config.json sets maxRuns: a slot held by another leaves the second free', async () => {
+  const queue = scratch()
+  plantLock(queue, { pid: process.pid, project: 'holder' })
+  const dir = project('proj-a', [WORK])
+  const h = home({ '.config/ci-local/config.json': v1({ maxRuns: 2 }) })
+  const { status, out, err } = await start([], { cwd: dir, queue, env: userEnv(h) }).done
+  assert.equal(status, 0, err)
+  assert.equal(err, '')
+  assert.doesNotMatch(out, /Waiting for/)
+})
+
+test('~/.ci-local/config.json comes before ~/.config/ci-local/config.json; XDG_CONFIG_HOME moves the second; the environment wins', async () => {
+  const dir = project('proj-a', [WORK])
+  const busy = async (env) => {
+    const queue = scratch()
+    plantLock(queue, { pid: process.pid, project: 'holder' })
+    return (await start(['--no-wait'], { cwd: dir, queue, env }).done).status
+  }
+  const both = home({ '.ci-local/config.json': v1({ maxRuns: 1 }), '.config/ci-local/config.json': v1({ maxRuns: 2 }) })
+  assert.equal(await busy(userEnv(both)), 3, '~/.ci-local/config.json: one at a time')
+  const xdg = home({ 'cfg/ci-local/config.json': v1({ maxRuns: 2 }) })
+  const at = { XDG_CONFIG_HOME: join(xdg, 'cfg') }
+  assert.equal(await busy(userEnv(xdg, at)), 0)
+  assert.equal(await busy(userEnv(xdg, { ...at, CI_LOCAL_MAX_RUNS: '1' })), 3, 'the environment wins')
+  assert.equal(await busy(userEnv(xdg, { ...at, CI_LOCAL_USER_CONFIG: 'off' })), 3, 'off: no file')
+  const other = join(scratch('cfg-'), 'mine.json')
+  writeFileSync(other, JSON.stringify(v1({ maxRuns: 2 })))
+  assert.equal(await busy(userEnv(scratch('home-'), { CI_LOCAL_USER_CONFIG: other })), 0, 'CI_LOCAL_USER_CONFIG names the file')
+})
+
+test('the queue settings of the file: queue.timeout gives up, queue.enabled false runs without waiting', async () => {
+  const dir = project('proj-a', [WORK])
+  const queue = scratch()
+  plantLock(queue, { pid: process.pid, project: 'holder' })
+  const timed = await start([], { cwd: dir, queue, env: userEnv(home({ '.ci-local/config.json': v1({ queue: { timeout: 1, notice: 0 } }) })) }).done
+  assert.equal(timed.status, 3)
+  assert.match(timed.err, /^ci-local: gave up waiting after \d+s for holder/)
+  const off = await start([], { cwd: dir, queue, env: userEnv(home({ '.ci-local/config.json': v1({ queue: { enabled: false } }) })) }).done
+  assert.equal(off.status, 0, off.err)
+  assert.doesNotMatch(off.out, /Waiting for/)
+})
+
+test('a settings file that is not valid is said on stderr and ignored whole: the run goes on with the defaults', async () => {
+  const dir = project('proj-a', [WORK])
+  const cases = [
+    ['{ nope', /is not JSON \(/],
+    [{ maxRuns: 2 }, /: schema must be "ci-local\.config\/v1", got undefined: its settings are ignored\n/],
+    [{ schema: 'ci-local.config/v2', maxRuns: 2 }, /: schema must be "ci-local\.config\/v1", got "ci-local\.config\/v2"/],
+    [v1({ maxRuns: 2, events: '/tmp/x' }), /: unknown key "events": its settings are ignored\n/],
+    [v1({ maxRuns: 2, queue: { speed: 1 } }), /: unknown key "queue\.speed"/],
+    [v1({ maxRuns: '2' }), /: "maxRuns" must be a whole number from 1 to 99, got "2"/],
+    [v1({ maxRuns: 0 }), /: "maxRuns" must be a whole number from 1 to 99, got 0/],
+    [v1({ maxRuns: 2, queue: { dir: 'relative' } }), /: "queue\.dir" must be an absolute path, got "relative"/],
+    [v1({ maxRuns: 2, queue: [] }), /: "queue" must be an object/],
+  ]
+  for (const [content, said] of cases) {
+    const h = home({ '.ci-local/config.json': content })
+    const queue = scratch()
+    plantLock(queue, { pid: process.pid, project: 'holder' })
+    const { status, err } = await start(['--no-wait'], { cwd: dir, queue, env: userEnv(h) }).done
+    assert.equal(status, 3, `${JSON.stringify(content)}: maxRuns not taken, one at a time`)
+    assert.match(err, new RegExp(`^ci-local: ${join(h, '.ci-local', 'config.json').replace(/[.]/g, '\\.')}`))
+    assert.match(err, said, JSON.stringify(content))
+  }
 })

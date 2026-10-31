@@ -26,14 +26,14 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["bin", "docker", "parity.js", "parity.d.ts", "status.js", "status.d.ts", "CHANGELOG.md"],
+  "files": ["bin", "docker", "config.js", "parity.js", "parity.d.ts", "status.js", "status.d.ts", "CHANGELOG.md"],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "prepare": "node scripts/link-self.mjs",
     "pretest": "node scripts/link-self.mjs",
-    "test": "node --test test/*.test.js pi/test/*.test.js",
+    "test": "CI_LOCAL_USER_CONFIG=off node --test test/*.test.js pi/test/*.test.js",
     "lint": "shellcheck bin/ci-local test/fixture/ci-local.config.sh"
   },
   "dependencies": {

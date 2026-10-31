@@ -7,6 +7,21 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Added
+
+- `CI_LOCAL_MAX_RUNS=N` (1 to 99, default 1) lets N runs go at once on the
+  machine, for one whose Docker takes them. Runs still take turns first come
+  first served; a run among the first N in the queue takes one of N slots
+  (`lock`, `lock.2`, … in the queue directory). Slot 1 is the `lock` older
+  versions use, so they still wait for it. Breaking the slot of a dead run is
+  now compare-and-move: a live slot made meanwhile is put back.
+- A settings file for every run of the user: `~/.ci-local/config.json`, else
+  `~/.config/ci-local/config.json` (`$XDG_CONFIG_HOME/ci-local/config.json`),
+  JSON of schema `ci-local.config/v1` with the queue's settings (`maxRuns`,
+  `queue.enabled`, `queue.dir`, `queue.poll`, `queue.timeout`,
+  `queue.notice`). The environment wins over it; a file that is not valid is
+  said and ignored whole. `CI_LOCAL_USER_CONFIG` names another file, or `off`.
+
 ## 0.9.0
 
 ### Fixed
