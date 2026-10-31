@@ -16,6 +16,43 @@ CI_LOCAL_VERSION="0.9.0"
 NL=$'\n'
 CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 
+# ------------------------------------------------ the user's settings
+#
+# The machine-wide settings of the queue, for every run of this user, in the
+# first of ~/.ci-local/config.json and ${XDG_CONFIG_HOME:-~/.config}/ci-local/
+# config.json that exists (CI_LOCAL_USER_CONFIG names another file; off: none).
+# JSON of schema ci-local.config/v1, checked by config.js, which gives the
+# environment variables its settings stand for; a file that is not valid is
+# said and ignored. A variable set in the environment wins over the file.
+
+user_config_file() {
+  local file config_home="${XDG_CONFIG_HOME:-}"
+  case "${CI_LOCAL_USER_CONFIG:-}" in
+    0 | off | false | no) return 0 ;;
+    '') ;;
+    *) echo "$CI_LOCAL_USER_CONFIG"; return 0 ;;
+  esac
+  [[ -n "$config_home" ]] || config_home="${HOME:+$HOME/.config}"
+  for file in "${HOME:+$HOME/.ci-local/config.json}" "${config_home:+$config_home/ci-local/config.json}"; do
+    [[ -n "$file" && -f "$file" ]] && { echo "$file"; return 0; }
+  done
+  return 0
+}
+
+load_user_config() {
+  local file settings line name
+  file="$(user_config_file)"
+  [[ -n "$file" ]] || return 0
+  command -v node >/dev/null 2>&1 || { echo "ci-local: node is not on PATH: $file is ignored" >&2; return 0; }
+  settings="$(node "$CI_LOCAL_HOME/config.js" "$file")" || return 0
+  while IFS= read -r line; do
+    [[ "$line" == CI_LOCAL_*=* ]] || continue
+    name=${line%%=*}
+    [[ -n "${!name:-}" ]] || printf -v "$name" '%s' "${line#*=}"
+  done <<<"$settings"
+}
+load_user_config
+
 # ------------------------------------------------------------ the project
 
 find_repo() {
@@ -490,7 +527,9 @@ Options:
                   machine is busy, say which run holds it and exit with
                   status 3. Runs of every project on this machine take turns,
                   first come first served, so Docker has one at a time
-                  (CI_LOCAL_MAX_RUNS=N: N at a time; default 1).
+                  (CI_LOCAL_MAX_RUNS=N: N at a time; default 1). These
+                  queue settings may also go in ~/.ci-local/config.json or
+                  ~/.config/ci-local/config.json (see README).
                   CI_LOCAL_QUEUE=off lets runs overlap; the queue lives in
                   CI_LOCAL_QUEUE_DIR (default ~/.cache/ci-local/queue).
                   A waiting run says every CI_LOCAL_QUEUE_NOTICE seconds

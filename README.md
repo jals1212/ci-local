@@ -366,6 +366,30 @@ The `total` of the summary counts from the turn, not from the wait.
   Each run reads its own value, so set it the same for every run (in your
   shell profile, say); a run of a version before 0.10.0 still goes one at a
   time and waits for the first slot.
+- **A settings file for every run of yours**: the queue's settings may go in
+  `~/.ci-local/config.json` or `~/.config/ci-local/config.json`
+  (`$XDG_CONFIG_HOME/ci-local/config.json` when that is set); the first of the
+  two that exists is read. Its `schema` must be `ci-local.config/v1`:
+
+  ```json
+  {
+    "schema": "ci-local.config/v1",
+    "maxRuns": 2,
+    "queue": { "enabled": true, "dir": "/abs/path", "poll": 2, "timeout": 0, "notice": 300 }
+  }
+  ```
+
+  Every key is optional and stands for an environment variable: `maxRuns`
+  for `CI_LOCAL_MAX_RUNS` (1 to 99), `queue.enabled` for `CI_LOCAL_QUEUE`
+  (`true` or `false`), `queue.dir` for `CI_LOCAL_QUEUE_DIR` (absolute),
+  `queue.poll` for `CI_LOCAL_QUEUE_POLL` (seconds above 0),
+  `queue.timeout` and `queue.notice` for `CI_LOCAL_QUEUE_TIMEOUT` and
+  `CI_LOCAL_QUEUE_NOTICE` (whole seconds). A variable set in the environment
+  wins over the file. A file that is not valid (not JSON, another schema, an
+  unknown key, a wrong type or value) is said on stderr and ignored whole:
+  the run goes on as without it. `CI_LOCAL_USER_CONFIG=<file>` reads another
+  file instead, and `CI_LOCAL_USER_CONFIG=off` none. The file is read with
+  `node`.
 - **`CI_LOCAL_QUEUE=off`** (also `0`, `false`, `no`) lets runs overlap, as
   before. It still records one `queued` event, so `--status` has no gap.
 - **`--list`, `--print-plan`, `--down`, `--status`, `--help`, `--version`** do
@@ -525,6 +549,7 @@ on your machine, with `set -e` in force. Options:
 | `CI_LOCAL_QUEUE_TIMEOUT` | Whole seconds a run waits for its turn before it gives up and exits 3. `0`: no limit. Default: `0`. Not a whole number: status 2. |
 | `CI_LOCAL_QUEUE_NOTICE` | Whole seconds between two `Still waiting for …` lines while waiting. `0`: none. Default: `300`. Not a whole number: status 2. |
 | `CI_LOCAL_MAX_RUNS` | How many runs may go at once on the machine, 1 to 99. Default: `1`. Anything else: status 2. |
+| `CI_LOCAL_USER_CONFIG` | The settings file (JSON, `ci-local.config/v1`) to read instead of `~/.ci-local/config.json` or `~/.config/ci-local/config.json`; `off`: none. |
 | `CI_LOCAL_DOWN_GRACE` | Whole seconds `--down` gives the step of a run it stops to end on TERM before it kills its processes. Default: `10`. Not a whole number: status 2. |
 | `CI_LOCAL_DOWN_WAIT` | Whole seconds `--down` waits for a run it stops to clean up and end; past them it says the run is still going and removes what is left anyway. Default: `120`. Not a whole number: status 2. |
 | `XDG_CACHE_HOME`, `HOME`, `TMPDIR` | Where `<cache>` is: `$XDG_CACHE_HOME`, else `$HOME/.cache`, else `$TMPDIR/ci-local-<uid>`. |

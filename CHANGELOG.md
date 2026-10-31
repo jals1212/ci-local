@@ -15,6 +15,12 @@ their `release x.y.z:` commit messages.
   (`lock`, `lock.2`, … in the queue directory). Slot 1 is the `lock` older
   versions use, so they still wait for it. Breaking the slot of a dead run is
   now compare-and-move: a live slot made meanwhile is put back.
+- A settings file for every run of the user: `~/.ci-local/config.json`, else
+  `~/.config/ci-local/config.json` (`$XDG_CONFIG_HOME/ci-local/config.json`),
+  JSON of schema `ci-local.config/v1` with the queue's settings (`maxRuns`,
+  `queue.enabled`, `queue.dir`, `queue.poll`, `queue.timeout`,
+  `queue.notice`). The environment wins over it; a file that is not valid is
+  said and ignored whole. `CI_LOCAL_USER_CONFIG` names another file, or `off`.
 
 ## 0.9.0
 

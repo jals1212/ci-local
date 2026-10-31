@@ -1017,3 +1017,82 @@ test('CI_LOCAL_MAX_RUNS: anything but a whole number from 1 to 99 is a usage err
   }
 })
 
+// ------------------------------------------------ the user's settings file
+
+/** A home with these files (path relative to it → content; objects as JSON). */
+function home(files) {
+  const dir = scratch('home-')
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(join(dir, path, '..'), { recursive: true })
+    writeFileSync(join(dir, path), typeof content === 'string' ? content : JSON.stringify(content))
+  }
+  return dir
+}
+const userEnv = (dir, extra = {}) => ({ HOME: dir, XDG_CONFIG_HOME: '', CI_LOCAL_USER_CONFIG: '', ...extra })
+const v1 = (settings) => ({ schema: 'ci-local.config/v1', ...settings })
+
+test('~/.config/ci-local/config.json sets maxRuns: a slot held by another leaves the second free', async () => {
+  const queue = scratch()
+  plantLock(queue, { pid: process.pid, project: 'holder' })
+  const dir = project('proj-a', [WORK])
+  const h = home({ '.config/ci-local/config.json': v1({ maxRuns: 2 }) })
+  const { status, out, err } = await start([], { cwd: dir, queue, env: userEnv(h) }).done
+  assert.equal(status, 0, err)
+  assert.equal(err, '')
+  assert.doesNotMatch(out, /Waiting for/)
+})
+
+test('~/.ci-local/config.json comes before ~/.config/ci-local/config.json; XDG_CONFIG_HOME moves the second; the environment wins', async () => {
+  const dir = project('proj-a', [WORK])
+  const busy = async (env) => {
+    const queue = scratch()
+    plantLock(queue, { pid: process.pid, project: 'holder' })
+    return (await start(['--no-wait'], { cwd: dir, queue, env }).done).status
+  }
+  const both = home({ '.ci-local/config.json': v1({ maxRuns: 1 }), '.config/ci-local/config.json': v1({ maxRuns: 2 }) })
+  assert.equal(await busy(userEnv(both)), 3, '~/.ci-local/config.json: one at a time')
+  const xdg = home({ 'cfg/ci-local/config.json': v1({ maxRuns: 2 }) })
+  const at = { XDG_CONFIG_HOME: join(xdg, 'cfg') }
+  assert.equal(await busy(userEnv(xdg, at)), 0)
+  assert.equal(await busy(userEnv(xdg, { ...at, CI_LOCAL_MAX_RUNS: '1' })), 3, 'the environment wins')
+  assert.equal(await busy(userEnv(xdg, { ...at, CI_LOCAL_USER_CONFIG: 'off' })), 3, 'off: no file')
+  const other = join(scratch('cfg-'), 'mine.json')
+  writeFileSync(other, JSON.stringify(v1({ maxRuns: 2 })))
+  assert.equal(await busy(userEnv(scratch('home-'), { CI_LOCAL_USER_CONFIG: other })), 0, 'CI_LOCAL_USER_CONFIG names the file')
+})
+
+test('the queue settings of the file: queue.timeout gives up, queue.enabled false runs without waiting', async () => {
+  const dir = project('proj-a', [WORK])
+  const queue = scratch()
+  plantLock(queue, { pid: process.pid, project: 'holder' })
+  const timed = await start([], { cwd: dir, queue, env: userEnv(home({ '.ci-local/config.json': v1({ queue: { timeout: 1, notice: 0 } }) })) }).done
+  assert.equal(timed.status, 3)
+  assert.match(timed.err, /^ci-local: gave up waiting after \d+s for holder/)
+  const off = await start([], { cwd: dir, queue, env: userEnv(home({ '.ci-local/config.json': v1({ queue: { enabled: false } }) })) }).done
+  assert.equal(off.status, 0, off.err)
+  assert.doesNotMatch(off.out, /Waiting for/)
+})
+
+test('a settings file that is not valid is said on stderr and ignored whole: the run goes on with the defaults', async () => {
+  const dir = project('proj-a', [WORK])
+  const cases = [
+    ['{ nope', /is not JSON \(/],
+    [{ maxRuns: 2 }, /: schema must be "ci-local\.config\/v1", got undefined: its settings are ignored\n/],
+    [{ schema: 'ci-local.config/v2', maxRuns: 2 }, /: schema must be "ci-local\.config\/v1", got "ci-local\.config\/v2"/],
+    [v1({ maxRuns: 2, events: '/tmp/x' }), /: unknown key "events": its settings are ignored\n/],
+    [v1({ maxRuns: 2, queue: { speed: 1 } }), /: unknown key "queue\.speed"/],
+    [v1({ maxRuns: '2' }), /: "maxRuns" must be a whole number from 1 to 99, got "2"/],
+    [v1({ maxRuns: 0 }), /: "maxRuns" must be a whole number from 1 to 99, got 0/],
+    [v1({ maxRuns: 2, queue: { dir: 'relative' } }), /: "queue\.dir" must be an absolute path, got "relative"/],
+    [v1({ maxRuns: 2, queue: [] }), /: "queue" must be an object/],
+  ]
+  for (const [content, said] of cases) {
+    const h = home({ '.ci-local/config.json': content })
+    const queue = scratch()
+    plantLock(queue, { pid: process.pid, project: 'holder' })
+    const { status, err } = await start(['--no-wait'], { cwd: dir, queue, env: userEnv(h) }).done
+    assert.equal(status, 3, `${JSON.stringify(content)}: maxRuns not taken, one at a time`)
+    assert.match(err, new RegExp(`^ci-local: ${join(h, '.ci-local', 'config.json').replace(/[.]/g, '\\.')}`))
+    assert.match(err, said, JSON.stringify(content))
+  }
+})
