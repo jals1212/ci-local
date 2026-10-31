@@ -7,6 +7,12 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Fixed
+
+- A settings file with a key that every JavaScript object inherits
+  (`"constructor"`, `"toString"`) printed a stack trace instead of
+  `unknown key "constructor"`. The run went on without the file in both cases.
+
 ## 0.10.1
 
 ### Fixed

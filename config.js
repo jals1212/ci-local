@@ -49,7 +49,8 @@ export function settingsVars(data) {
   const vars = []
   const take = (table, object, prefix) => {
     for (const [key, value] of Object.entries(object)) {
-      const known = table[key]
+      // Own keys only: `constructor` or `toString` are not settings.
+      const known = Object.hasOwn(table, key) ? table[key] : undefined
       if (!known) return `unknown key "${prefix}${key}"`
       if (!known.valid(value)) return `"${prefix}${key}" must be ${known.expected}, got ${JSON.stringify(value)}`
       vars.push([known.variable, known.text(value)])
