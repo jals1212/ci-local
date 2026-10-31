@@ -1,6 +1,6 @@
 {
   "name": "@jals1212/ci-local-pi",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Pi extension and skill for @jals1212/ci-local: the state of this repository's ci-local run in Pi's status line, cards and a read-only tool for the agent.",
   "license": "MIT",
   "author": "jals1212",

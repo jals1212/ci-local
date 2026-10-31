@@ -4,7 +4,7 @@ description: "Trigger: ci-local, run CI locally, ci-local.config.sh, CI_PROJECT,
 license: MIT
 metadata:
   author: jals1212
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 ## Activation Contract
