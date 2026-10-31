@@ -978,6 +978,35 @@ test('CI_LOCAL_MAX_RUNS=2: two runs go at once, each in its own slot; the third 
   assert.deepEqual(readdirSync(queue), [])
 })
 
+test('CI_LOCAL_MAX_RUNS=2: two runs of the same project never go at once, and the waiting one keeps its place', async () => {
+  const queue = scratch()
+  const env = { CI_LOCAL_MAX_RUNS: '2' }
+  const dirA = project('proj-a', [GATE])
+  const dirA2 = project('proj-a', [WORK])
+  const dirB = project('proj-b', [WORK])
+  const evA = eventsOf()
+  const runA = start(['--events', evA], { cwd: dirA, queue, env })
+  await until(() => existsSync(join(dirA, 'started')))
+  const pidA = kinds(evA, 'run')[0].pid
+  const runA2 = start([], { cwd: dirA2, queue, env })
+  await until(() => runA2.out.includes('Waiting for '))
+  // A slot is free, but the run's own project holds the other.
+  assert.deepEqual(waitingLines(runA2.out), [`Waiting for proj-a (pid ${pidA}) · 1 ahead`])
+  const busy = await start(['--no-wait'], { cwd: dirA2, queue, env }).done
+  assert.equal(busy.status, 3)
+  assert.equal(busy.err, `ci-local: the machine is busy: proj-a (pid ${pidA})\n`)
+  // First come, first served: another project comes after both, so it waits too.
+  const runB = start([], { cwd: dirB, queue, env })
+  await until(() => runB.out.includes('Waiting for '))
+  assert.deepEqual(waitingLines(runB.out), [`Waiting for proj-a (pid ${pidA}) · 2 ahead`])
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(existsSync(join(dirA2, 'ran')), false)
+  assert.equal(existsSync(join(dirB, 'ran')), false)
+  release(dirA)
+  for (const result of await Promise.all([runA.done, runA2.done, runB.done])) assert.equal(result.status, 0, result.err)
+  assert.deepEqual(readdirSync(queue), [])
+})
+
 test('CI_LOCAL_MAX_RUNS=2: a slot held by a live process leaves the other free; both held, --no-wait is refused', async () => {
   const dir = project('proj-a', [WORK])
   const env = { CI_LOCAL_MAX_RUNS: '2' }

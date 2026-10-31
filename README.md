@@ -151,7 +151,7 @@ a step fails, the last 40 lines of its log. The log directory is printed at
 the start and left in place after the run:
 
 ```text
-ci-local 0.10.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+ci-local 0.10.1: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 Step output: /tmp/myapp-ci-logs.Xa81Qe
 Events: /home/me/.cache/ci-local/myapp-ci.ndjson (ci-local --status)
 
@@ -327,7 +327,7 @@ that finds the machine busy waits:
 Waiting for other-ci (pid 48213) · 1 ahead
 ...
 Queue: your turn after 4m12s
-ci-local 0.10.0: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
+ci-local 0.10.1: 12 steps, node 24.21.0, project myapp-ci, jobs: quality tests
 ```
 
 The line is printed again only when whom the run waits for, or how many are
@@ -363,6 +363,9 @@ The `total` of the summary counts from the turn, not from the wait.
   for a machine whose Docker takes them. Runs still take turns, first come
   first served: a run goes ahead when fewer than N live runs came before it,
   and waits otherwise (`Waiting for <the oldest of them> · <N or more> ahead`).
+  Two runs of the same project still never go at once (they share its
+  containers, network and volumes): the second waits for the first, whatever
+  N is.
   Each run reads its own value, so set it the same for every run (in your
   shell profile, say); a run of a version before 0.10.0 still goes one at a
   time and waits for the first slot.

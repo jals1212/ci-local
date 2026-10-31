@@ -7,6 +7,16 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+## 0.10.1
+
+### Fixed
+
+- With `CI_LOCAL_MAX_RUNS` above 1, two runs of the same project (two
+  worktrees of a repository, say) could go at once and break each other: they
+  share the project's containers, network and volumes. A run now waits for an
+  earlier live run of its own project, whatever N is, and says so
+  (`Waiting for <project> (pid …)`). Runs of a version before 0.10.0 count too.
+
 ## 0.10.0
 
 ### Added
