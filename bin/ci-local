@@ -25,6 +25,7 @@ CI_LOCAL_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null ||
 # environment variables its settings stand for; a file that is not valid is
 # said and ignored. A variable set in the environment wins over the file.
 
+# The settings file to read: printed, or nothing when there is none.
 user_config_file() {
   local file config_home="${XDG_CONFIG_HOME:-}"
   case "${CI_LOCAL_USER_CONFIG:-}" in
@@ -34,7 +35,10 @@ user_config_file() {
   esac
   [[ -n "$config_home" ]] || config_home="${HOME:+$HOME/.config}"
   for file in "${HOME:+$HOME/.ci-local/config.json}" "${config_home:+$config_home/ci-local/config.json}"; do
-    [[ -n "$file" && -f "$file" ]] && { echo "$file"; return 0; }
+    if [[ -n "$file" && -f "$file" ]]; then
+      echo "$file"
+      return 0
+    fi
   done
   return 0
 }
@@ -1244,17 +1248,18 @@ queue_lock() {
     mv "$lock" "$stale" 2>/dev/null || continue
     moved=""
     [[ ! -f "$stale/pid" ]] || read -r moved 2>/dev/null <"$stale/pid" || true
-    if [[ "$moved" =~ ^[0-9]+$ && $((10#$moved)) != "$holder" ]]; then
-      # A live run's slot. Put back unless the place was taken meanwhile (a mv
-      # onto a directory would move it inside); then that run goes on without
-      # a slot, one more at once until it ends, and no slot of another is
-      # ever removed by its release (it checks lock/pid is its own).
-      if [[ ! -e "$lock" ]] && mv "$stale" "$lock" 2>/dev/null && [[ ! -e "$lock/${stale##*/}" ]]; then
-        continue
-      fi
-      rm -rf "${lock:?}/${stale##*/}"
+    if [[ ! "$moved" =~ ^[0-9]+$ || $((10#$moved)) == "$holder" ]]; then
+      rm -rf "$stale" # the one judged stale: gone
+      continue
     fi
-    rm -rf "$stale"
+    # A live run's slot, made since we read it: put back, and looked at again.
+    if [[ ! -e "$lock" ]] && mv "$stale" "$lock" 2>/dev/null && [[ ! -e "$lock/${stale##*/}" ]]; then
+      continue
+    fi
+    # Its place was taken meanwhile (and a mv onto a directory moves inside
+    # it): that run goes on without a slot, one more at once until it ends.
+    # Its release removes no slot of another: it checks lock/pid is its own.
+    rm -rf "${lock:?}/${stale##*/}" "$stale"
   done
   return 1
 }

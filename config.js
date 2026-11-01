@@ -19,16 +19,24 @@ export const SCHEMA = 'ci-local.config/v1'
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 const wholeIn = (value, min, max) => Number.isInteger(value) && value >= min && value <= max
 
-/** Each setting: the variable it stands for, its check, and the variable's text. */
+const isAbsolutePath = (v) => typeof v === 'string' && v.startsWith('/') && !/[\u0000-\u001f]/.test(v)
+const isSeconds = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 3600
+
+/**
+ * A setting of the file: the environment variable it stands for, whether a
+ * value is valid, what a valid one is (for the error), and the variable's text.
+ */
+const setting = (variable, valid, expected, text = String) => ({ variable, valid, expected, text })
+
 const SETTINGS = {
-  maxRuns: ['CI_LOCAL_MAX_RUNS', (v) => wholeIn(v, 1, 99), 'a whole number from 1 to 99', String],
+  maxRuns: setting('CI_LOCAL_MAX_RUNS', (v) => wholeIn(v, 1, 99), 'a whole number from 1 to 99'),
 }
 const QUEUE = {
-  enabled: ['CI_LOCAL_QUEUE', (v) => typeof v === 'boolean', 'true or false', (v) => (v ? 'on' : 'off')],
-  dir: ['CI_LOCAL_QUEUE_DIR', (v) => typeof v === 'string' && v.startsWith('/') && !/[\u0000-\u001f]/.test(v), 'an absolute path', String],
-  poll: ['CI_LOCAL_QUEUE_POLL', (v) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 3600, 'seconds above 0, at most 3600', String],
-  timeout: ['CI_LOCAL_QUEUE_TIMEOUT', (v) => wholeIn(v, 0, 999_999_999), 'whole seconds, 0 or more', String],
-  notice: ['CI_LOCAL_QUEUE_NOTICE', (v) => wholeIn(v, 0, 999_999_999), 'whole seconds, 0 or more', String],
+  enabled: setting('CI_LOCAL_QUEUE', (v) => typeof v === 'boolean', 'true or false', (v) => (v ? 'on' : 'off')),
+  dir: setting('CI_LOCAL_QUEUE_DIR', isAbsolutePath, 'an absolute path'),
+  poll: setting('CI_LOCAL_QUEUE_POLL', isSeconds, 'seconds above 0, at most 3600'),
+  timeout: setting('CI_LOCAL_QUEUE_TIMEOUT', (v) => wholeIn(v, 0, 999_999_999), 'whole seconds, 0 or more'),
+  notice: setting('CI_LOCAL_QUEUE_NOTICE', (v) => wholeIn(v, 0, 999_999_999), 'whole seconds, 0 or more'),
 }
 
 /**
@@ -41,15 +49,17 @@ export function settingsVars(data) {
   const vars = []
   const take = (table, object, prefix) => {
     for (const [key, value] of Object.entries(object)) {
-      const setting = table[key]
-      if (!setting) return `unknown key "${prefix}${key}"`
-      const [name, valid, expected, text] = setting
-      if (!valid(value)) return `"${prefix}${key}" must be ${expected}, got ${JSON.stringify(value)}`
-      vars.push([name, text(value)])
+      // Own keys only: `constructor` or `toString` are not settings.
+      const known = Object.hasOwn(table, key) ? table[key] : undefined
+      if (!known) return `unknown key "${prefix}${key}"`
+      if (!known.valid(value)) return `"${prefix}${key}" must be ${known.expected}, got ${JSON.stringify(value)}`
+      vars.push([known.variable, known.text(value)])
     }
     return null
   }
-  const { schema, queue, ...top } = data
+  // `schema` is checked above; `queue` is a table of its own.
+  const top = Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'schema' && key !== 'queue'))
+  const { queue } = data
   let error = take(SETTINGS, top, '')
   if (!error && queue !== undefined) error = isObject(queue) ? take(QUEUE, queue, 'queue.') : '"queue" must be an object'
   return error ? { error } : { vars }

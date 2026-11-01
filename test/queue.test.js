@@ -1159,6 +1159,8 @@ test('a settings file that is not valid is said on stderr and ignored whole: the
     [v1({ maxRuns: 0 }), /: "maxRuns" must be a whole number from 1 to 99, got 0/],
     [v1({ maxRuns: 2, queue: { dir: 'relative' } }), /: "queue\.dir" must be an absolute path, got "relative"/],
     [v1({ maxRuns: 2, queue: [] }), /: "queue" must be an object/],
+    [v1({ maxRuns: 2, constructor: 1 }), /: unknown key "constructor": its settings are ignored\n/],
+    [v1({ maxRuns: 2, queue: { toString: 1 } }), /: unknown key "queue\.toString"/],
   ]
   for (const [content, said] of cases) {
     const h = home({ '.ci-local/config.json': content })
