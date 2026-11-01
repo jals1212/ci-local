@@ -6,6 +6,15 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.5.2
+
+### Fixed
+
+- The skill names both places of the settings file (`~/.ci-local/config.json`,
+  `~/.config/ci-local/config.json`) and says two runs of the same project never
+  go at once (ci-local 0.10.1), so a run waiting for its own project is not
+  taken for a stuck queue.
+
 ## 0.5.1
 
 ### Fixed
