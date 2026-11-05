@@ -1,4 +1,6 @@
-# @jals1212/ci-local-pi
+# 🚦 @jals1212/ci-local-pi
+
+![ci-local: a workflow's steps run on your machine, in Linux, all passed](https://raw.githubusercontent.com/jals1212/ci-local/main/assets/preview.png)
 
 The [Pi](https://pi.dev) package for [`@jals1212/ci-local`](https://github.com/jals1212/ci-local):
 ci-local's state in Pi's status line, cards in the transcript, a read-only
