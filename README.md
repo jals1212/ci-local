@@ -1,4 +1,6 @@
-# ci-local
+# 🚦 ci-local
+
+![ci-local: a workflow's steps run on your machine, in Linux, all passed](assets/preview.png)
 
 Run your Node project's GitHub Actions workflow steps on your own machine, in
 Linux, without touching your development stack — and keep the two in step with

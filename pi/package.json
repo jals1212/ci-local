@@ -15,7 +15,8 @@
   "type": "module",
   "pi": {
     "extensions": ["./extensions/ci-local.ts"],
-    "skills": ["./skills"]
+    "skills": ["./skills"],
+    "image": "https://raw.githubusercontent.com/jals1212/ci-local/main/assets/preview.png"
   },
   "files": ["extensions", "skills", "README.md", "CHANGELOG.md"],
   "engines": {

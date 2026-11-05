@@ -9,7 +9,9 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 
 test('the Pi entries exist and are in files', () => {
   assert.equal(pkg.name, '@jals1212/ci-local-pi')
-  assert.deepEqual(pkg.pi, { extensions: ['./extensions/ci-local.ts'], skills: ['./skills'] })
+  const image = 'https://raw.githubusercontent.com/jals1212/ci-local/main/assets/preview.png'
+  assert.deepEqual(pkg.pi, { extensions: ['./extensions/ci-local.ts'], skills: ['./skills'], image })
+  assert.ok(existsSync(new URL('../../assets/preview.png', import.meta.url)), 'the gallery image is in the repository')
   for (const entry of [...pkg.pi.extensions, ...pkg.pi.skills]) {
     assert.ok(existsSync(new URL(entry, new URL('../', import.meta.url))), `${entry} exists`)
     assert.ok(pkg.files.includes(entry.split('/')[1]), `${entry} is shipped`)

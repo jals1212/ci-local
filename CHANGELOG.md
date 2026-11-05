@@ -7,6 +7,11 @@ their `release x.y.z:` commit messages.
 
 ## Unreleased
 
+### Added
+
+- 🚦 is ci-local's emoji: it opens the README, above a preview image
+  (`assets/preview.png`, drawn from `assets/preview.html`).
+
 ### Fixed
 
 - A settings file with a key that every JavaScript object inherits

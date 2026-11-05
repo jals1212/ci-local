@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- Source of assets/preview.png, the Pi package gallery preview (pi/package.json pi.image)
+     and the image at the top of the README.
+     Regenerate on macOS: qlmanage -t -s 1280 -o <dir> assets/preview.html, then
+     sips -c 640 1280 <dir>/preview.html.png --out assets/preview.png
+     (Quick Look renders a 1000px square page: the image is the band in its middle, hence the zoom and margin below). -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { width: 100%; height: 1000px; overflow: hidden;
+    background: radial-gradient(circle at 15% 45%, #16301f 0%, #0f1a14 40%, #0a0f0c 75%); }
+  body { zoom: 0.78125; }
+  html, body { margin: 0; }
+  body { width: 1280px; height: 640px; margin-top: 320px; }
+  body {
+    color: #e6efe8;
+    font-family: -apple-system, "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex; align-items: center; gap: 48px; padding: 0 64px;
+  }
+  .left { width: 440px; }
+  .mark { font-size: 92px; line-height: 1; }
+  h1 { font-size: 64px; font-weight: 800; letter-spacing: -1.5px; margin-top: 14px; }
+  p { font-size: 24px; line-height: 1.38; color: #a9c2b1; margin-top: 18px; }
+  .tags { margin-top: 26px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .tags span { font: 600 17px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #c4f0d2;
+    background: #183324; border: 1px solid #2d5a3f; border-radius: 999px; padding: 9px 14px; }
+  .term { flex: 1; background: #111a15; border: 1px solid #2a4434; border-radius: 16px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45); overflow: hidden; }
+  .bar { height: 38px; background: #17241d; display: flex; align-items: center; gap: 8px; padding: 0 16px; }
+  .bar i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .body { padding: 20px 24px 24px; font: 18px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: #cfe0d4; white-space: pre; }
+  .prompt { color: #8be9b0; }
+  .dim { color: #6f8a78; }
+  .ok { color: #5fd68a; }
+  .pass { color: #5fd68a; font-weight: 700; }
+  .status { margin-top: 14px; border-top: 1px solid #243a2d; padding-top: 12px; display: flex; justify-content: space-between; }
+  .status b { color: #ffd479; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="mark">🚦</div>
+    <h1>ci-local</h1>
+    <p>Run your GitHub Actions workflow steps on your own machine, in Linux, without touching your development stack.</p>
+    <div class="tags"><span>npx ci-local</span><span>parity</span><span>ci-local-pi</span></div>
+  </div>
+  <div class="term">
+    <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <div class="body"><div><span class="prompt">❯</span> npx ci-local</div><div class="dim">ci-local summary: node 24, jobs: quality tests</div><div>  <span class="ok">ok</span>  Build the runner image       0s</div><div>  <span class="ok">ok</span>  Start the Linux runner       1s</div><div>  <span class="ok">ok</span>  npm ci                       9s</div><div>  <span class="ok">ok</span>  npm run lint                 7s</div><div>  <span class="ok">ok</span>  Start the database          11s</div><div>  <span class="ok">ok</span>  npm test                 1m12s</div><div><span class="pass">PASSED</span>: every step ran and passed.</div><div class="status"><span class="dim">Development stack untouched</span><b>🚦 passed 1m40s</b></div></div>
+  </div>
+</body>
+</html>
