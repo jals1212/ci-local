@@ -6,6 +6,12 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+### Fixed
+
+- The README says how to show the herdr-app `ci` label: clone the layout and
+  the `agents` mod, point the layout to the clone, and add the label's line
+  to each agent's row.
+
 ## 0.7.0
 
 ### Added

@@ -64,9 +64,41 @@ runs ci-local or Docker itself:
   result window. A label has no TTL: the session removes it when it ends, and
   a session that starts in another terminal first removes it from the one it
   leaves, so a Pi killed without ending can leave the last line until the
-  next session replaces it. The Herdr app's default Agents panel does not show labels; a
-  sidebar mod reads it from `terminals()[i].labels.ci`. Both sidebars are
-  served when both environments are present.
+  next session replaces it. Both sidebars are served when both environments
+  are present. The Herdr app's shipped Agents panel does not show labels, so
+  showing it takes a copy of that panel (mods and layouts shipped with Herdr
+  are read-only; a clone is yours):
+
+  1. Clone the layout you use and the `agents` mod:
+
+     ```sh
+     herdr-app do layout.clone '{"name":"main","as":"my-layout"}'
+     herdr-app do mod.clone '{"name":"agents","as":"my-agents"}'
+     ```
+
+  2. In `~/.config/herdr-app/layouts/my-layout.json`, point the Agents block
+     to the clone: `"content": { "mod": "my-agents" }`.
+  3. In `~/.config/herdr-app/mods/my-agents/main.js`, import `terminals` from
+     `"herdr"`, read each terminal's labels by address, and add a line to the
+     agent's row when it has a `ci` label:
+
+     ```js
+     // where the rows are built: the labels of every terminal, by address
+     const labelsOf = new Map(terminals().map((x) => [x.address, x.labels ?? {}]))
+
+     // in the row of agent `a` (`t` is the mod's theme())
+     const ci = labelsOf.get(a.address)?.ci ?? ''
+     const ciColor = ci.includes('✗') ? '#f38ba8' : ci.includes('✓') ? '#a6e3a1' : ci.includes('⧗') ? '#f9e2af' : t.muted
+     // ...the row...
+       .when(Boolean(ci), (el) => el.child(div().min_w(0).truncate().text_size(12).text_color(ciColor).child(ci)))
+     ```
+
+  4. Check the mod, which the app reloads on save:
+     `herdr-app check ~/.config/herdr-app/mods/my-agents`.
+
+  To try the mod without a run, set a label by hand in a Herdr app terminal
+  with `hc label "$HC_TERMINAL_ID" ci="✓ test"`,
+  and remove it with `hc label "$HC_TERMINAL_ID" ci=`.
 - **Only the session's own runs** get the cards and the notification, and
   reach the agent: runs this session started. A run started from Pi's bash
   tool names its session (ci-local records Pi's `PI_SESSION_ID` as `session`
