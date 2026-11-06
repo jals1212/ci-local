@@ -6,6 +6,8 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.7.1
+
 ### Fixed
 
 - The README says how to show the herdr-app `ci` label: clone the layout and
