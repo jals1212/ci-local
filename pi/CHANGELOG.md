@@ -6,6 +6,13 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+### Added
+
+- herdr-app: in a terminal of the Herdr app (`HC_TERMINAL_ID`), the status
+  line is also the terminal's `ci` label (`hc label`), cleared when the
+  session ends or starts in another terminal. The Herdr (TUI) `$ci` token is
+  unchanged.
+
 ## 0.6.0
 
 ### Added

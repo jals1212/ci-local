@@ -55,6 +55,8 @@ import {
   eventsFileFor,
   exitCard,
   findProject,
+  herdrAppSend,
+  herdrAppTerminal,
   herdrPane,
   herdrSend,
   launchReport,
@@ -110,6 +112,9 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
   // (see createHerdrLine in core.js); null elsewhere. Read when a session
   // starts following, so a test or a moved pane gets its own.
   let herdr: { pane: string; socket: string; publisher: ReturnType<typeof createHerdrPublisher> } | undefined
+  // In a herdr-app (hc) terminal, the same line is the terminal's `ci` label
+  // (see herdrAppSend in core.js). A label has no TTL: no refresh.
+  let herdrApp: { terminal: string; publisher: ReturnType<typeof createHerdrPublisher> } | undefined
 
   pi.on('agent_start', async () => {
     runActive = true
@@ -214,10 +219,21 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     timer = undefined
   }
 
+  // A label has no TTL: when the session now runs in another herdr-app
+  // terminal (or in none), the one it leaves keeps its line until cleared.
+  async function leaveHerdrAppTerminal() {
+    const left = herdrApp
+    if (!left || herdrAppTerminal(process.env)?.terminal === left.terminal) return
+    herdrApp = undefined
+    left.publisher.update(null)
+    await left.publisher.idle()
+  }
+
   pi.on('session_start', async (event, ctx: ExtensionContext) => {
     stop()
     runActive = false
     startReason = event.reason
+    await leaveHerdrAppTerminal()
     follow(ctx)
   })
 
@@ -265,7 +281,14 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
     if (pane && (herdr?.pane !== pane.pane || herdr.socket !== pane.socket)) {
       herdr = { ...pane, publisher: createHerdrPublisher({ send: herdrSend(pane) }) }
     }
-    const herdrLine = pane ? createHerdrLine() : undefined
+    const appTerminal = herdrAppTerminal(process.env)
+    if (appTerminal && herdrApp?.terminal !== appTerminal.terminal) {
+      // session_start already cleared the terminal left (leaveHerdrAppTerminal);
+      // another caller switching here clears it without waiting.
+      herdrApp?.publisher.update(null)
+      herdrApp = { ...appTerminal, publisher: createHerdrPublisher({ send: herdrAppSend(appTerminal), refreshMs: Infinity }) }
+    }
+    const herdrLine = pane || appTerminal ? createHerdrLine() : undefined
 
     const tick = () => {
       let run
@@ -276,7 +299,11 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
       }
       const { footer, changed } = statusLine.update(run)
       if (changed) ctx.ui.setStatus(KEY, footer)
-      if (herdrLine) herdr?.publisher.update(herdrLine.text(run))
+      if (herdrLine) {
+        const text = herdrLine.text(run)
+        if (pane) herdr?.publisher.update(text)
+        if (appTerminal) herdrApp?.publisher.update(text)
+      }
       settleLaunches(run)
       // Only this session's own runs get cards and reach the agent, as Gentle
       // AI's job notices go only to the session that started the job. Another
@@ -354,11 +381,12 @@ function ciLocal(pi: ExtensionAPI, { launchWaitMs }: { launchWaitMs: number }) {
 
   pi.on('session_shutdown', async () => {
     stop()
-    // The sidebar token goes with the session (its TTL would end it anyway).
-    if (herdr) {
-      herdr.publisher.update(null)
-      await herdr.publisher.idle()
-    }
+    // The sidebar token goes with the session (its TTL would end it anyway);
+    // the label has no TTL: clearing it here is what removes it. Both are
+    // cleared at once, so a slow one does not hold up the other.
+    herdr?.publisher.update(null)
+    herdrApp?.publisher.update(null)
+    await Promise.all([herdr?.publisher.idle(), herdrApp?.publisher.idle()])
     startReason = undefined
     delete (globalThis as Record<symbol, unknown>)[FLAG]
   })

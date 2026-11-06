@@ -23,7 +23,7 @@ const canRunTs = Boolean(process.features?.typescript)
 
 // Tests run in whatever pane they are started from: never report to a real
 // Herdr. The Herdr test sets its own pane and socket.
-for (const name of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH']) delete process.env[name]
+for (const name of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH', 'HC_TERMINAL_ID']) delete process.env[name]
 
 const deadPid = () => Number(spawnSync('bash', ['-c', 'echo $$'], { encoding: 'utf8' }).stdout.trim())
 const ago = (ms) => new Date(Date.now() - ms).toISOString()
@@ -566,5 +566,164 @@ test('in a Herdr pane, the footer is the pane\'s $ci token while the run goes, t
   } finally {
     server.close()
     for (const name of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH']) delete process.env[name]
+  }
+})
+
+test('in a herdr-app terminal, the footer is the terminal\'s ci label while the run goes, then its result, and the session clears it', TS, async () => {
+  const { readFileSync, chmodSync } = await import('node:fs')
+  const extension = await loadExtension()
+  const { repo, file } = glueRepo('glue-ci')
+  const dir = mkdtempSync(join(tmpdir(), 'hc-'))
+  const log = join(dir, 'log')
+  writeFileSync(join(dir, 'hc'), `#!/bin/sh\nprintf '%s|' "$@" >> '${log}'\necho >> '${log}'\n`)
+  chmodSync(join(dir, 'hc'), 0o755)
+  const labels = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) } catch { return [] } }
+  const until = async (check) => {
+    for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(check(), JSON.stringify(labels()))
+  }
+  const path = process.env.PATH
+  Object.assign(process.env, { HC_TERMINAL_ID: 't7', PATH: `${dir}:${path}` })
+  try {
+    write(file, [runEvent('glue-ci', 'me')])
+    await withPolling(file, async (tick) => {
+      const me = await openSession(extension, { repo, sessionId: 'me' })
+      await until(() => labels().length === 1)
+      assert.match(labels()[0], /^label\|t7\|ci=🚦 ci-local · ⧗ /)
+      write(file, [record('end', { result: 'passed', durationMs: 1000, devStack: 'none' })])
+      tick()
+      await until(() => /✓ passed/.test(labels().at(-1)))
+      await me.shutdown()
+      assert.equal(labels().at(-1), 'label|t7|ci=|')
+    })
+  } finally {
+    delete process.env.HC_TERMINAL_ID
+    process.env.PATH = path
+  }
+})
+
+test('the herdr-app ci label is set once while its line stays the same: a label has no TTL to refresh', TS, async () => {
+  const { readFileSync, chmodSync } = await import('node:fs')
+  const extension = await loadExtension()
+  const { repo, file } = glueRepo('glue-ci')
+  const dir = mkdtempSync(join(tmpdir(), 'hc-'))
+  const log = join(dir, 'log')
+  writeFileSync(join(dir, 'hc'), `#!/bin/sh\nprintf '%s|' "$@" >> '${log}'\necho >> '${log}'\n`)
+  chmodSync(join(dir, 'hc'), 0o755)
+  const labels = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) } catch { return [] } }
+  const until = async (check) => {
+    for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(check(), JSON.stringify(labels()))
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 200))
+  const path = process.env.PATH
+  Object.assign(process.env, { HC_TERMINAL_ID: 't7', PATH: `${dir}:${path}` })
+  try {
+    write(file, [runEvent('glue-ci', 'me'), record('end', { result: 'passed', durationMs: 1000, devStack: 'none' })])
+    await withPolling(file, async (tick) => {
+      const me = await openSession(extension, { repo, sessionId: 'me' })
+      await until(() => labels().length === 1)
+      assert.match(labels()[0], /^label\|t7\|ci=🚦 ci-local · ✓ passed .* · just now\|$/)
+      // 30 s of polling, well past Herdr's 10 s refresh, with the same line.
+      tick(15)
+      await settle()
+      tick(15)
+      await settle()
+      assert.equal(labels().length, 1, JSON.stringify(labels()))
+      await me.shutdown()
+      assert.deepEqual(labels().slice(1), ['label|t7|ci=|'])
+    })
+  } finally {
+    delete process.env.HC_TERMINAL_ID
+    process.env.PATH = path
+  }
+})
+
+test('a session that starts in another herdr-app terminal first clears the ci label of the terminal it leaves', TS, async () => {
+  const { readFileSync, chmodSync } = await import('node:fs')
+  const extension = await loadExtension()
+  const { repo, file } = glueRepo('glue-ci')
+  const dir = mkdtempSync(join(tmpdir(), 'hc-'))
+  const log = join(dir, 'log')
+  writeFileSync(join(dir, 'hc'), `#!/bin/sh\nprintf '%s|' "$@" >> '${log}'\necho >> '${log}'\n`)
+  chmodSync(join(dir, 'hc'), 0o755)
+  const labels = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) } catch { return [] } }
+  const until = async (check) => {
+    for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(check(), JSON.stringify(labels()))
+  }
+  const path = process.env.PATH
+  Object.assign(process.env, { HC_TERMINAL_ID: 't7', PATH: `${dir}:${path}` })
+  try {
+    write(file, [runEvent('glue-ci', 'me')])
+    await withPolling(file, async () => {
+      const me = await openSession(extension, { repo, sessionId: 'me' })
+      await until(() => labels().length === 1)
+      assert.match(labels()[0], /^label\|t7\|ci=🚦 ci-local · ⧗ /)
+      process.env.HC_TERMINAL_ID = 't8'
+      await me.start()
+      await until(() => labels().some((line) => line.startsWith('label|t8|')))
+      const cleared = labels().indexOf('label|t7|ci=|')
+      assert.ok(cleared > 0, JSON.stringify(labels()))
+      assert.ok(cleared < labels().findIndex((line) => line.startsWith('label|t8|')), JSON.stringify(labels()))
+      await me.shutdown()
+      assert.equal(labels().at(-1), 'label|t8|ci=|')
+      assert.equal(labels().filter((line) => line.startsWith('label|t7|')).length, 2)
+    })
+  } finally {
+    delete process.env.HC_TERMINAL_ID
+    process.env.PATH = path
+  }
+})
+
+test('session_shutdown clears the Herdr token and the herdr-app label together, not one after the other', TS, async () => {
+  const { createServer } = await import('node:net')
+  const { readFileSync, chmodSync } = await import('node:fs')
+  const extension = await loadExtension()
+  const { repo, file } = glueRepo('glue-ci')
+  const dir = mkdtempSync(join(tmpdir(), 'hc-'))
+  const log = join(dir, 'log')
+  writeFileSync(join(dir, 'hc'), `#!/bin/sh\nprintf '%s|' "$@" >> '${log}'\necho >> '${log}'\n`)
+  chmodSync(join(dir, 'hc'), 0o755)
+  const labels = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) } catch { return [] } }
+  const socket = join(mkdtempSync(join(tmpdir(), 'herdr-')), 'h.sock')
+  const reports = []
+  // The answer to the token's clear waits (up to 1 s, within herdrSend's 2 s)
+  // for the label's clear: it comes only if both were sent at once.
+  let labelClearedFirst
+  const server = createServer((conn) => {
+    conn.on('data', async (data) => {
+      for (const line of String(data).split('\n').filter(Boolean)) {
+        const request = JSON.parse(line)
+        reports.push(request.params)
+        if (request.params.tokens.ci === null) {
+          for (let i = 0; i < 200 && !labels().includes('label|t7|ci=|'); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+          labelClearedFirst = labels().includes('label|t7|ci=|')
+        }
+        conn.write(JSON.stringify({ id: request.id, result: { type: 'ok' } }) + '\n')
+      }
+    })
+  })
+  await new Promise((resolve) => server.listen(socket, resolve))
+  const until = async (check) => {
+    for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(check(), JSON.stringify({ reports, labels: labels() }))
+  }
+  const path = process.env.PATH
+  Object.assign(process.env, { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', HERDR_SOCKET_PATH: socket, HC_TERMINAL_ID: 't7', PATH: `${dir}:${path}` })
+  try {
+    write(file, [runEvent('glue-ci', 'me')])
+    await withPolling(file, async () => {
+      const me = await openSession(extension, { repo, sessionId: 'me' })
+      await until(() => reports.length === 1 && labels().length === 1)
+      await me.shutdown()
+      assert.deepEqual(reports.at(-1).tokens, { ci: null })
+      assert.equal(labels().at(-1), 'label|t7|ci=|')
+      assert.equal(labelClearedFirst, true)
+    })
+  } finally {
+    server.close()
+    for (const name of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH', 'HC_TERMINAL_ID']) delete process.env[name]
+    process.env.PATH = path
   }
 })
