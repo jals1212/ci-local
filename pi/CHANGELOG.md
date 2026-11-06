@@ -6,6 +6,8 @@ add or change behaviour and a patch version fixes.
 
 ## Unreleased
 
+## 0.7.0
+
 ### Added
 
 - herdr-app: in a terminal of the Herdr app (`HC_TERMINAL_ID`), the status
