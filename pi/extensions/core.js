@@ -2,7 +2,7 @@
 // follows, the footer line, and when a run it watched has ended. The
 // rendering and the states are those of `ci-local --status` (status.js).
 
-import { spawn, spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import {
   closeSync,
   existsSync,
@@ -784,6 +784,30 @@ export function herdrSend({ pane, socket }, { timeoutMs = 2000 } = {}) {
       })
       conn.on('error', () => finish(false))
       conn.on('close', () => finish(false))
+    })
+}
+
+// herdr-app (the Herdr desktop app, on herdr-core `hc`): it has no metadata
+// tokens; a terminal's labels play their part. In a terminal hc runs
+// (`HC_TERMINAL_ID`), the token is the terminal's `ci` label, which a sidebar
+// mod reads from `terminals()[i].labels.ci`. A label has no TTL, so it is not
+// reported again while unchanged, and the session clears it when it ends.
+
+/** The address of the herdr-app (hc) terminal this process runs in, or null outside one. */
+export function herdrAppTerminal(env = process.env) {
+  const terminal = env.HC_TERMINAL_ID?.trim()
+  return terminal ? { terminal } : null
+}
+
+/**
+ * A sender of the token as the terminal's `ci` label (`hc label <t> ci=<value>`;
+ * an empty value removes it): resolves true when hc exits 0, false on any
+ * error or after `timeoutMs`.
+ */
+export function herdrAppSend({ terminal }, { bin = 'hc', timeoutMs = 2000 } = {}) {
+  return (value) =>
+    new Promise((resolve) => {
+      execFile(bin, ['label', terminal, `${HERDR_TOKEN}=${value ?? ''}`], { timeout: timeoutMs, windowsHide: true }, (error) => resolve(!error))
     })
 }
 

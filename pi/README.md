@@ -58,6 +58,15 @@ runs ci-local or Docker itself:
     ] }],
   ]
   ```
+- **herdr-app sidebar**: in a terminal of the [Herdr app](https://herdr.dev)
+  (herdr-core sets `HC_TERMINAL_ID`), the same line is the terminal's `ci`
+  label, set with `hc label <terminal> ci=<line>`, with the same 5-minute
+  result window. A label has no TTL: the session removes it when it ends, and
+  a session that starts in another terminal first removes it from the one it
+  leaves, so a Pi killed without ending can leave the last line until the
+  next session replaces it. The Herdr app's default Agents panel does not show labels; a
+  sidebar mod reads it from `terminals()[i].labels.ci`. Both sidebars are
+  served when both environments are present.
 - **Only the session's own runs** get the cards and the notification, and
   reach the agent: runs this session started. A run started from Pi's bash
   tool names its session (ci-local records Pi's `PI_SESSION_ID` as `session`

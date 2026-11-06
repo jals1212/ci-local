@@ -30,6 +30,8 @@ import {
   herdrPane,
   herdrReport,
   herdrSend,
+  herdrAppTerminal,
+  herdrAppSend,
   ciLocalBin,
   exitCard,
   launchReport,
@@ -843,4 +845,25 @@ test('herdrSend: one JSON line to the socket, true when Herdr says ok, false oth
     server.close()
   }
   assert.equal(await herdrSend({ pane: 'w1:p1', socket: join(tmpdir(), 'no-such.sock') })('x'), false)
+})
+
+test('herdrAppTerminal: only inside a herdr-app terminal, with its address', () => {
+  assert.equal(herdrAppTerminal({}), null)
+  assert.equal(herdrAppTerminal({ HC_TERMINAL_ID: ' ' }), null)
+  assert.deepEqual(herdrAppTerminal({ HC_TERMINAL_ID: 't1' }), { terminal: 't1' })
+})
+
+test('herdrAppSend: the token is the terminal\'s ci label (empty clears it), true when hc exits 0', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hc-'))
+  const log = join(dir, 'log')
+  const hc = join(dir, 'hc')
+  writeFileSync(hc, `#!/bin/sh\nprintf '%s|' "$@" >> '${log}'\necho >> '${log}'\n[ "$3" = "ci=fail" ] && exit 1\nexit 0\n`)
+  chmodSync(hc, 0o755)
+  const send = herdrAppSend({ terminal: 't1' }, { bin: hc })
+  assert.equal(await send('🚦 ci-local · ✓ passed'), true)
+  assert.equal(await send(null), true)
+  assert.equal(await send('fail'), false)
+  assert.equal(await herdrAppSend({ terminal: 't1' }, { bin: join(dir, 'missing') })('x'), false)
+  const { readFileSync } = await import('node:fs')
+  assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), ['label|t1|ci=🚦 ci-local · ✓ passed|', 'label|t1|ci=|', 'label|t1|ci=fail|'])
 })
